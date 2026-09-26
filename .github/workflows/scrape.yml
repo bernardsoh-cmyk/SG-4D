@@ -1,19 +1,32 @@
 # Publishes the results feed the app reads.
 #
-# 4D draws Wednesday, Saturday and Sunday at 6.30pm SGT, and results appear on
-# the site within the hour — so this fires at 20:00 SGT (12:00 UTC) on those
-# days, and again at 23:00 SGT to catch a late publication.
+# 4D draws Wednesday, Saturday and Sunday at 6.30pm SGT (10:30 UTC), and the
+# results appear on Singapore Pools' site within the hour. First run is about
+# an hour after that, with a second as a safety net.
 #
-# --limit 5 keeps each run to the draws actually missing. A cold start wants
-# `python tools/scrape.py --backfill 250` run once, locally, and the result
-# committed.
+# On the minutes, which are deliberate and not arbitrary: these were originally
+# '0 12' and '0 15', and every run landed roughly FOUR HOURS late — 15:55 and
+# 18:09 UTC on 20 Sep, 16:42 and 18:56 on 23 Sep. GitHub's scheduler is
+# best-effort, and the top of the hour is when everyone else's cron is queued,
+# so a job at :00 waits behind the crowd. Off-peak minutes get picked up sooner.
+# Keep them odd-looking; do not "tidy" them back to :00.
+#
+# Even so, a late run is normal rather than broken. The app copes with a feed
+# that is behind: it labels the result as possibly not the latest, and inside
+# the APK the native fallback reads Singapore Pools directly.
+#
+# --limit 5 keeps each run to the draws actually missing. It walks the index
+# newest-first, so new draws are always taken first and any leftover budget
+# quietly backfills older history until it reaches the 2023 end of the index.
+# A cold start wants `python tools/scrape.py --backfill 250` run once, locally,
+# with the result committed.
 
 name: Scrape 4D results
 
 on:
   schedule:
-    - cron: '0 12 * * 0,3,6'
-    - cron: '0 15 * * 0,3,6'
+    - cron: '37 11 * * 0,3,6'   # 19:37 SGT — about an hour after the draw
+    - cron: '43 14 * * 0,3,6'   # 22:43 SGT — safety net
   workflow_dispatch:
 
 permissions:
