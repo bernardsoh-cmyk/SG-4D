@@ -1,6 +1,7 @@
 package com.bernard.sg4d;
 
 import android.app.Activity;
+import android.graphics.Color;
 import android.os.Bundle;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
@@ -8,7 +9,9 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 
+import androidx.webkit.WebSettingsCompat;
 import androidx.webkit.WebViewAssetLoader;
+import androidx.webkit.WebViewFeature;
 
 /**
  * Hosts the SG 4D web app in a WebView.
@@ -45,12 +48,27 @@ public class MainActivity extends Activity {
                 .build();
 
         webView = new WebView(this);
+        // A WebView defaults to white, but says so explicitly here because the
+        // page is light and any gap between the window appearing and the CSS
+        // painting should not flash a different shade.
+        webView.setBackgroundColor(Color.WHITE);
         WebSettings s = webView.getSettings();
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
         // Nothing is read off the filesystem directly - the loader serves assets.
         s.setAllowFileAccess(false);
         s.setAllowContentAccess(false);
+
+        // Opt out of WebView's automatic darkening, explicitly.
+        //
+        // The page is light by design and says so with `color-scheme: light`.
+        // On a phone in system dark mode WebView can still invert the content
+        // for itself, and a user with "Override force-dark" switched on in
+        // Developer Options gets that whatever the app targets. Saying no here
+        // costs nothing and removes a whole class of "why is it dark" reports.
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
+            WebSettingsCompat.setAlgorithmicDarkeningAllowed(s, false);
+        }
 
         webView.setWebViewClient(new WebViewClient() {
             @Override

@@ -1,4 +1,9 @@
-const CACHE = 'sg4d-v1';
+/* Bump this whenever a bundled asset changes in a way a stale copy would make
+ * visibly wrong. It went v1 -> v2 when the theme changed from dark to light:
+ * the activate handler deletes every cache whose name is not the current one,
+ * so a device still holding the old dark style.css throws it away on the next
+ * launch instead of serving it over the new build. */
+const CACHE = 'sg4d-v2';
 const ASSETS = [
   './',
   './index.html',

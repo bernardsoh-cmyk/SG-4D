@@ -1,6 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="AppTheme" parent="android:Theme.Material.NoActionBar">
+    <!-- .Light matters: plain Theme.Material is the DARK Material theme, which
+         is what this inherited from the app it was copied from. The window
+         colours below were overridden to white, but every native surface the
+         WebView does not cover - the consent dialog, the ad container, the
+         WebView's own background before the page paints - kept rendering dark
+         against a light app. -->
+    <style name="AppTheme" parent="android:Theme.Material.Light.NoActionBar">
         <item name="android:windowBackground">@color/app_bg</item>
         <item name="android:statusBarColor">@color/app_bg</item>
         <item name="android:navigationBarColor">@color/app_bg</item>
