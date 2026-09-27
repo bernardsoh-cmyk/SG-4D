@@ -2,7 +2,11 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<!-- maximum-scale=1 and user-scalable=no were inherited from the games in this
+     collection, where blocking pinch-zoom stops a stray gesture ruining a level.
+     Here it did the opposite of what the app needs: it denied the one control
+     an older reader reaches for when a number is still too small. Zoom is on. -->
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="theme-color" content="#ffffff">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
