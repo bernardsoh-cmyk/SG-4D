@@ -3,6 +3,9 @@ package com.imagoforge.sg4d;
 import android.app.Activity;
 import android.graphics.Color;
 import android.os.Bundle;
+import android.content.ActivityNotFoundException;
+import android.content.Intent;
+import android.net.Uri;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
@@ -76,6 +79,24 @@ public class MainActivity extends Activity {
                 // Only the virtual host is intercepted; requests to the results
                 // feed fall through and go out over the network as normal.
                 return loader.shouldInterceptRequest(req.getUrl());
+            }
+
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                // Only the bundled origin loads in this WebView, so its bridges never reach
+                // another page. http(s) links go to the browser; any other scheme is dropped.
+                Uri url = request.getUrl();
+                if ("appassets.androidplatform.net".equals(url.getHost())) return false;
+                String scheme = url.getScheme();
+                if ("http".equals(scheme) || "https".equals(scheme)) {
+                    try {
+                        view.getContext().startActivity(new Intent(Intent.ACTION_VIEW, url)
+                                .addCategory(Intent.CATEGORY_BROWSABLE));
+                    } catch (ActivityNotFoundException ignored) {
+                        // No browser installed.
+                    }
+                }
+                return true;
             }
         });
 
