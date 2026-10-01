@@ -10,7 +10,7 @@
 
   TO GO LIVE for SG 4D:
     1. Register the app at https://apps.admob.com under the package name
-       com.bernard.sg4d, then create a banner, an interstitial and a rewarded unit.
+       com.imagoforge.sg4d, then create a banner, an interstitial and a rewarded unit.
     2. Replace ALL FOUR ids below with your own:
          - app_id          : App settings > App ID       (uses '~')
          - banner_id       : Ad units > banner unit      (uses '/')

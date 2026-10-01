@@ -8,11 +8,11 @@ val keystoreProps = Properties().apply {
 }
 
 android {
-  namespace = "com.bernard.sg4d"
+  namespace = "com.imagoforge.sg4d"
   compileSdk { version = release(36) { minorApiLevel = 1 } }
 
   defaultConfig {
-    applicationId = "com.bernard.sg4d"
+    applicationId = "com.imagoforge.sg4d"
     minSdk = 24
     targetSdk = 36
     versionCode = 1

@@ -1,4 +1,4 @@
-package com.bernard.sg4d;
+package com.imagoforge.sg4d;
 
 import android.webkit.JavascriptInterface;
 import android.webkit.WebView;
