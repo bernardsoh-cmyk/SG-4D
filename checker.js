@@ -79,8 +79,9 @@ window.SGCheck = (function () {
   /** The ten numbers a 4D Roll covers, e.g. '58R2' or '58x2' -> 5802..5892. */
   function rollNumbers(pattern) {
     var s = String(pattern).toUpperCase();
+    // Exactly one rolling slot; the other three must be digits.
+    if (!/^[\dRX?]{4}$/.test(s) || (s.match(/[RX?]/g) || []).length !== 1) return null;
     var slot = s.search(/[RX?]/);
-    if (slot === -1 || s.length !== 4) return null;
     var out = [];
     for (var d = 0; d <= 9; d++) out.push(s.slice(0, slot) + d + s.slice(slot + 1));
     return out;
@@ -125,6 +126,7 @@ window.SGCheck = (function () {
       numbers = rollNumbers(entry);
       if (!numbers) return { error: 'A 4D Roll needs one rolling digit, e.g. 58R2.' };
     } else if (type === 'system') {
+      if (!/^\d{4}$/.test(String(entry))) return { error: 'Enter a 4-digit number from 0000 to 9999.' };
       if (digitPattern(entry) === 'allSame') {
         return { error: 'A number with four identical digits has only one permutation, so it cannot be a System Entry.' };
       }

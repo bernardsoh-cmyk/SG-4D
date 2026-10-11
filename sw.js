@@ -3,7 +3,7 @@
  * the activate handler deletes every cache whose name is not the current one,
  * so a device still holding the old dark style.css throws it away on the next
  * launch instead of serving it over the new build. */
-const CACHE = 'sg4d-v2';
+const CACHE = 'sg4d-v4';
 const ASSETS = [
   './',
   './index.html',

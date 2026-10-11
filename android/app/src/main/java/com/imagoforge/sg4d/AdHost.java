@@ -48,6 +48,9 @@ public final class AdHost {
 
     private volatile InterstitialAd interstitial;
     private volatile RewardedAd rewarded;
+    // UI thread only. A second tap while an ad is on screen used to report
+    // reward=false, which cleared ads.js's callback and lost the real reward.
+    private boolean rewardedShowing;
     private volatile boolean bannerEnabled = true;
 
     public AdHost(Activity activity, WebView webView) {
@@ -230,6 +233,7 @@ public final class AdHost {
         @JavascriptInterface
         public void showRewarded() {
             activity.runOnUiThread(() -> {
+                if (rewardedShowing) return;
                 RewardedAd ad = rewarded;
                 if (ad == null) {
                     loadRewarded();
@@ -237,16 +241,19 @@ public final class AdHost {
                     return;
                 }
                 rewarded = null;
+                rewardedShowing = true;
                 final boolean[] earned = { false };
                 ad.setFullScreenContentCallback(new FullScreenContentCallback() {
                     @Override
                     public void onAdDismissedFullScreenContent() {
+                        rewardedShowing = false;
                         loadRewarded();
                         if (!earned[0]) toWeb("reward", false);   // closed early
                     }
 
                     @Override
                     public void onAdFailedToShowFullScreenContent(AdError error) {
+                        rewardedShowing = false;
                         loadRewarded();
                         toWeb("reward", false);
                     }

@@ -91,7 +91,7 @@ html, body {
   flex: 0 0 auto;
 }
 .brand { display: flex; align-items: center; gap: 11px; min-width: 0; }
-.brand-mark { font-size: 26px; }
+.brand-mark { width: 36px; height: 36px; border-radius: 9px; flex: 0 0 auto; }
 .brand-name { font-weight: 700; font-size: var(--fs-md); letter-spacing: .2px; }
 .status { font-size: var(--fs-xs); color: var(--muted); }
 .status.stale { color: var(--warn); }

@@ -3,6 +3,7 @@ package com.imagoforge.sg4d;
 import android.app.Activity;
 import android.graphics.Color;
 import android.os.Bundle;
+import android.view.View;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.net.Uri;
@@ -12,6 +13,8 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 
+import androidx.webkit.ServiceWorkerClientCompat;
+import androidx.webkit.ServiceWorkerControllerCompat;
 import androidx.webkit.WebSettingsCompat;
 import androidx.webkit.WebViewAssetLoader;
 import androidx.webkit.WebViewFeature;
@@ -49,6 +52,20 @@ public class MainActivity extends Activity {
         final WebViewAssetLoader loader = new WebViewAssetLoader.Builder()
                 .addPathHandler("/assets/", new WebViewAssetLoader.AssetsPathHandler(this))
                 .build();
+
+        // A service worker's own fetches do not pass through WebViewClient, so without this
+        // the worker would go to the network for files that only exist inside the APK.
+        // appassets.androidplatform.net never resolves there, so from the second launch on
+        // (once sw.js controls the page) the app opened to a blank white screen.
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.SERVICE_WORKER_SHOULD_INTERCEPT_REQUEST)) {
+            ServiceWorkerControllerCompat.getInstance().setServiceWorkerClient(
+                    new ServiceWorkerClientCompat() {
+                        @Override
+                        public WebResourceResponse shouldInterceptRequest(WebResourceRequest request) {
+                            return loader.shouldInterceptRequest(request.getUrl());
+                        }
+                    });
+        }
 
         webView = new WebView(this);
         // A WebView defaults to white, but says so explicitly here because the
@@ -107,7 +124,17 @@ public class MainActivity extends Activity {
 
         // AdHost wraps the WebView so the banner docks below it, and owns the
         // "AndroidAds" bridge and the ad lifecycle. See AdHost.java.
-        setContentView(new AdHost(this, webView).root());
+        View root = new AdHost(this, webView).root();
+        // targetSdk 36 ignores the theme's edge-to-edge opt-out, so pad by the
+        // system-bar insets to keep the page and the docked banner clear of the
+        // status and nav bars. Consumed so the page's env(safe-area-inset-*)
+        // padding does not add a second gap on top of this one.
+        root.setOnApplyWindowInsetsListener((v, insets) -> {
+            v.setPadding(insets.getSystemWindowInsetLeft(), insets.getSystemWindowInsetTop(),
+                    insets.getSystemWindowInsetRight(), insets.getSystemWindowInsetBottom());
+            return insets.consumeSystemWindowInsets();
+        });
+        setContentView(root);
 
         if (savedInstanceState != null) {
             webView.restoreState(savedInstanceState);
