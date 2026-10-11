@@ -61,24 +61,31 @@ public class NetBridge {
     }
 
     /**
-     * Fetch `url` and hand the body back to window.__netCallback(id, ok, body).
+     * Fetch `url` and hand the result to
+     * window.__netCallback(id, ok, body, status, lastModified).
+     *
+     * `ifModifiedSince` may be empty. When it carries a Last-Modified value
+     * from an earlier response, the server is free to answer 304 with no body,
+     * and that is reported as status 304 with an empty body rather than as an
+     * error. The page polls on this: an unchanged file costs nothing.
+     *
      * Returns immediately; never throws into JavaScript.
      */
     @JavascriptInterface
-    public void request(final String url, final String requestId) {
+    public void request(final String url, final String requestId, final String ifModifiedSince) {
         pool.execute(new Runnable() {
             @Override
             public void run() {
                 try {
-                    deliver(requestId, true, fetch(url));
+                    fetch(url, ifModifiedSince, requestId);
                 } catch (Exception e) {
-                    deliver(requestId, false, String.valueOf(e.getMessage()));
+                    deliver(requestId, false, String.valueOf(e.getMessage()), 0, null);
                 }
             }
         });
     }
 
-    private String fetch(String rawUrl) throws Exception {
+    private void fetch(String rawUrl, String ifModifiedSince, String requestId) throws Exception {
         URL url = new URL(rawUrl);
         if (!"https".equals(url.getProtocol()) || !ALLOWED_HOST.equals(url.getHost())) {
             throw new SecurityException("blocked: " + url.getProtocol() + "://" + url.getHost());
@@ -93,8 +100,15 @@ public class NetBridge {
             conn.setUseCaches(false);
             conn.setRequestProperty("User-Agent", UA);
             conn.setRequestProperty("Accept", "text/html,application/xhtml+xml");
+            if (ifModifiedSince != null && ifModifiedSince.length() > 0) {
+                conn.setRequestProperty("If-Modified-Since", ifModifiedSince);
+            }
 
             int code = conn.getResponseCode();
+            if (code == HttpURLConnection.HTTP_NOT_MODIFIED) {
+                deliver(requestId, true, "", code, ifModifiedSince);
+                return;
+            }
             if (code != HttpURLConnection.HTTP_OK) throw new Exception("HTTP " + code);
 
             // A redirect can only ever land back on the allowed host, because
@@ -113,17 +127,20 @@ public class NetBridge {
                 out.write(buf, 0, n);
             }
             in.close();
-            return out.toString("UTF-8");
+            deliver(requestId, true, out.toString("UTF-8"), code, conn.getHeaderField("Last-Modified"));
         } finally {
             conn.disconnect();
         }
     }
 
-    private void deliver(final String requestId, final boolean ok, final String payload) {
+    private void deliver(final String requestId, final boolean ok, final String payload,
+                         final int status, final String lastModified) {
         // JSONObject.quote does the escaping, so a page full of quotes, newlines
         // and angle brackets cannot break out of the string literal.
         final String js = "window.__netCallback && window.__netCallback("
-                + JSONObject.quote(requestId) + "," + ok + "," + JSONObject.quote(payload) + ")";
+                + JSONObject.quote(requestId) + "," + ok + "," + JSONObject.quote(payload)
+                + "," + status + ","
+                + (lastModified == null ? "null" : JSONObject.quote(lastModified)) + ")";
         webView.post(new Runnable() {
             @Override
             public void run() {

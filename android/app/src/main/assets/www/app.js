@@ -503,6 +503,19 @@
 
     $('#build-note').textContent = 'Results by Singapore Pools · independent app';
 
+    // Inside the app, data.js watches for tonight's draw and calls this the
+    // moment it lands. Only move the user to the new draw if they are still
+    // sitting on the latest one — if they have gone back to look at an older
+    // draw, pulling the view out from under them would be worse than waiting.
+    SGData.onLiveResult = function () {
+      var previousNewest = SGData.draws[1] && SGData.draws[1].draw;
+      var wasOnLatest = !ui.selectedDraw || ui.selectedDraw === previousNewest;
+      renderStatus();
+      if (wasOnLatest) ui.selectedDraw = SGData.draws[0].draw;
+      renderDrawPicker();
+      renderResults();
+    };
+
     SGData.load().then(function () {
       renderStatus();
       renderDrawPicker();

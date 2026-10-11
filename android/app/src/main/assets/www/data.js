@@ -50,7 +50,11 @@ window.SGData = (function () {
    * invent a result. */
   var DRAW_DAYS = [0, 3, 6];         // 0 = Sunday
   var DRAW_HOUR = 18.5;
-  var RESULTS_LAG_MS = 45 * 60 * 1000;  // results appear on the site ~30-45 min after
+  /* Measured, not guessed: on 11 Oct the 18:30 draw's file carried a
+   * Last-Modified of 18:52 SGT. 20 minutes is the point from which it is
+   * worth looking; before that the app is not yet entitled to call itself
+   * behind. */
+  var RESULTS_LAG_MS = 20 * 60 * 1000;
 
   var state = {
     draws: [],
@@ -234,8 +238,16 @@ window.SGData = (function () {
   })();
 
   var HOST = 'https://www.singaporepools.com.sg';
-  var LIST_URL = HOST + '/DataFileArchive/Lottery/Output/fourd_result_draw_list_en.html';
-  var PAGE_URL = HOST + '/en/product/Pages/4d_results.aspx?sppl=';
+
+  /* The six most recent draws, complete, in one 18 KB static file — 1st/2nd/3rd,
+   * all ten starters and all ten consolations, behind the same class anchors as
+   * the full results page. It replaces what used to be an index fetch plus one
+   * 95 KB page per missing draw.
+   *
+   * It also answers a conditional request with 304 and no body, which is what
+   * makes polling for a fresh result affordable: when nothing has been
+   * published, a check costs nothing. */
+  var TOP_DRAWS_URL = HOST + '/DataFileArchive/Lottery/Output/fourd_result_top_draws_en.html';
 
   /* The bridge is asynchronous — see NetBridge.java. It calls back into
    * __netCallback rather than returning, because a @JavascriptInterface method
@@ -244,24 +256,27 @@ window.SGData = (function () {
   var pending = {};
   var nextRequestId = 0;
 
-  window.__netCallback = function (id, ok, payload) {
+  window.__netCallback = function (id, ok, payload, status, lastModified) {
     var slot = pending[id];
     if (!slot) return;
     delete pending[id];
     clearTimeout(slot.timer);
-    if (ok) slot.resolve(payload); else slot.reject(new Error(payload));
+    if (ok) slot.resolve({ body: payload, status: status || 200, lastModified: lastModified || null });
+    else slot.reject(new Error(payload));
   };
 
-  function nativeGet(url) {
+  /** Resolves { body, status }. status 304 means "unchanged", with no body. */
+  function nativeGet(url, ifModifiedSince) {
     return new Promise(function (resolve, reject) {
       var id = 'r' + (++nextRequestId);
       pending[id] = {
-        resolve: function (body) {
-          if (!body) return reject(new Error('empty response: ' + url));
-          if (body.indexOf('PageNotFoundError') !== -1) {
+        resolve: function (res) {
+          if (res.status === 304) return resolve(res);
+          if (!res.body) return reject(new Error('empty response: ' + url));
+          if (res.body.indexOf('PageNotFoundError') !== -1) {
             return reject(new Error('results URL has moved: ' + url));
           }
-          resolve(body);
+          resolve(res);
         },
         reject: reject,
         // If the bridge never calls back the promise would hang forever and
@@ -272,7 +287,7 @@ window.SGData = (function () {
         }, 30000)
       };
       try {
-        nativeNet.request(url, id);
+        nativeNet.request(url, id, ifModifiedSince || '');
       } catch (e) {
         clearTimeout(pending[id].timer);
         delete pending[id];
@@ -281,36 +296,37 @@ window.SGData = (function () {
     });
   }
 
-  /** Pull at most `max` draws that we do not already hold. */
-  function nativeCatchUp(max) {
-    var known = {};
-    state.draws.forEach(function (d) { known[d.draw] = true; });
+  /* Last-Modified of the top-draws file as we last saw it, so the next check
+   * can be conditional. Held in memory only: a stale value costs one 18 KB
+   * response, never a wrong result. */
+  var topDrawsSeenAt = null;
 
-    return nativeGet(LIST_URL).then(function (listHtml) {
-      var wanted = [], re = /<option[^>]*>[^<]*<\/option>/g, m;
-      while ((m = re.exec(listHtml)) && wanted.length < max) {
-        var opt = m[0];
-        var num = /value='(\d+)'/.exec(opt);
-        var qs = /queryString='sppl=([^']+)'/.exec(opt);
-        if (!num || !qs) continue;
-        if (known[parseInt(num[1], 10)]) continue;
-        if (/isCancelled='(?!')/.test(opt)) continue;   // a cancelled draw has no result
-        wanted.push(qs[1]);
-      }
-      if (!wanted.length) return [];
-
-      // Sequential on purpose: this runs on someone's phone against a site we
-      // do not own, and it is only ever a handful of pages.
-      var out = [];
-      return wanted.reduce(function (chain, sppl) {
-        return chain.then(function () {
-          return nativeGet(PAGE_URL + sppl).then(function (html) {
-            var rec = parseFourD(html);
-            if (rec) out.push(rec);
-          }).catch(function () { /* one bad page must not sink the catch-up */ });
-        });
-      }, Promise.resolve()).then(function () { return out; });
+  /** Split the top-draws file into its six draws and parse each one. */
+  function parseTopDraws(body) {
+    var out = [];
+    // One <li> per draw, each a self-contained copy of the same markup the
+    // single-draw page uses, so parseFourD works on a chunk unchanged.
+    body.split('<li>').forEach(function (chunk) {
+      if (chunk.indexOf('drawNumber') === -1) return;
+      var rec = parseFourD(chunk);
+      if (rec) out.push(rec);
     });
+    return out;
+  }
+
+  /**
+   * Read the newest draws straight from Singapore Pools.
+   *
+   * Resolves the draws found, or [] when the file has not changed since we
+   * last looked (HTTP 304). Rejects only on a real failure.
+   */
+  function nativeLatest(conditional) {
+    return nativeGet(TOP_DRAWS_URL, conditional ? topDrawsSeenAt : null)
+      .then(function (res) {
+        if (res.status === 304) return [];
+        topDrawsSeenAt = res.lastModified || topDrawsSeenAt;
+        return parseTopDraws(res.body);
+      });
   }
 
   /* ---------------- public ---------------- */
@@ -341,7 +357,7 @@ window.SGData = (function () {
       recomputeStale();
       // Only reach for the site itself when the feed did not get us current.
       if (!state.stale || !nativeNet) return null;
-      return nativeCatchUp(6).then(function (r) {
+      return nativeLatest(false).then(function (r) {
         absorb({ fourd: r }, 'live');
         state.generated = new Date().toISOString();
         state.error = null;
@@ -349,7 +365,61 @@ window.SGData = (function () {
     }).then(function () {
       recomputeStale();
       writeCache();
+      schedulePoll();
       return state;
+    });
+  }
+
+  /* ---------------- waiting for tonight's draw ----------------
+   *
+   * The hosted feed is only as prompt as its cron, and GitHub's scheduler has
+   * been hours late in practice. Inside the app we can do better: once a draw
+   * is due and we still do not have it, check the top-draws file every minute.
+   *
+   * This is affordable only because the check is conditional — an unchanged
+   * file answers 304 with no body — so the common case of "not published yet"
+   * transfers nothing. Polling stops the moment the draw lands, never runs
+   * while the app is in the background, and never runs without the bridge. */
+
+  var POLL_MS = 60 * 1000;
+  var pollTimer = null;
+  var onPollResult = null;        // app.js attaches a re-render here
+
+  function stopPoll() {
+    if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+  }
+
+  function schedulePoll() {
+    stopPoll();
+    if (!nativeNet || !state.stale) return;        // nothing to wait for
+    if (typeof document !== 'undefined' && document.hidden) return;
+    pollTimer = setTimeout(poll, POLL_MS);
+  }
+
+  function poll() {
+    pollTimer = null;
+    if (!nativeNet || !state.stale) return;
+    if (typeof document !== 'undefined' && document.hidden) return;
+
+    nativeLatest(true).then(function (draws) {
+      var grew = draws.length && absorb({ fourd: draws }, 'live');
+      if (grew) {
+        state.generated = new Date().toISOString();
+        state.error = null;
+        recomputeStale();
+        writeCache();
+        if (onPollResult) onPollResult(state);
+      }
+      schedulePoll();                               // stops itself once current
+    }).catch(function () {
+      schedulePoll();                               // transient failure; try again
+    });
+  }
+
+  if (typeof document !== 'undefined') {
+    // Resume promptly when the user comes back, rather than at the next tick.
+    document.addEventListener('visibilitychange', function () {
+      if (document.hidden) stopPoll(); else if (state.stale) poll();
     });
   }
 
@@ -361,6 +431,8 @@ window.SGData = (function () {
     nextDraw: nextDraw,
     lastExpectedDraw: lastExpectedDraw,
     get hasNative() { return !!nativeNet; },
+    /** app.js sets this to re-render when a polled draw arrives. */
+    set onLiveResult(fn) { onPollResult = fn; },
     get feedConfigured() { return !!FEED_URL; },
 
     // exported so the parser can be exercised directly
