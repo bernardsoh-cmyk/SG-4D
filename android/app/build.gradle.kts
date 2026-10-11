@@ -2,8 +2,17 @@ import java.util.Properties
 
 plugins { id("com.android.application") }
 
+// The IMAGOFORGE key, not the personal one. This app ships under
+// com.imagoforge.sg4d, and the signing certificate is what Play ties a package
+// to permanently - so it has to match the owner of the package name, and it has
+// to be right before the first upload rather than after.
+//
+// Both this file and the keystore it names live one level above the repo, so
+// neither is ever committed. If the file is missing the build still configures,
+// then fails at signing with a null password rather than silently producing an
+// unsigned or debug-signed release.
 val keystoreProps = Properties().apply {
-  val f = rootProject.file("../../keystore.properties")
+  val f = rootProject.file("../../imagoforge-keystore.properties")
   if (f.exists()) f.inputStream().use { load(it) }
 }
 
@@ -21,7 +30,7 @@ android {
 
   signingConfigs {
     create("release") {
-      storeFile = rootProject.file("../../" + keystoreProps.getProperty("storeFile", "release-key.jks"))
+      storeFile = rootProject.file("../../" + keystoreProps.getProperty("storeFile", "imagoforge-release.jks"))
       storePassword = keystoreProps.getProperty("storePassword")
       keyAlias = keystoreProps.getProperty("keyAlias")
       keyPassword = keystoreProps.getProperty("keyPassword")
