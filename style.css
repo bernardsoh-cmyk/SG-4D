@@ -354,3 +354,70 @@ h3 { font-size: var(--fs-base); margin: 0 0 7px; }
 .ovcard p { font-size: var(--fs-sm); color: var(--muted); line-height: 1.6; margin: 0 0 12px; }
 .howlist { margin: 0 0 16px; padding-left: 20px; }
 .howlist li { font-size: var(--fs-sm); color: var(--muted); line-height: 1.65; margin-bottom: 5px; }
+
+/* ---------------- multi-game additions ---------------- */
+
+/* TOTO balls. Seven balls plus a "+" have to survive a 360px phone on one
+ * line — a winning row that wraps reads as two separate draws. Sized to fit
+ * rather than padded to taste. */
+.balls { display: flex; gap: 5px; align-items: center; }
+.ball {
+  flex: 1 1 0; min-width: 0; aspect-ratio: 1; max-width: 46px;
+  border-radius: 50%; display: flex; align-items: center; justify-content: center;
+  background: var(--accent); color: var(--on-accent); font-weight: 700;
+  font-size: min(var(--fs-md), 4.6vw); font-variant-numeric: tabular-nums;
+}
+.ball.add { background: var(--bg); color: var(--text); border: 2px solid var(--accent-dim); }
+.ball-plus { color: var(--muted); font-size: var(--fs-base); flex: 0 0 auto; }
+.jackpot-note { margin-top: 12px; }
+
+/* The 49-ball picker. Seven across is the tidy arrangement for 1-49, but on a
+ * 360px phone it yields 42px circles - under the 44px floor the rest of the
+ * app holds to, and these are the fiddliest targets in it. Six across gives
+ * about 50px. Tidiness loses. */
+.ball-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; }
+.ball-grid button {
+  aspect-ratio: 1; border-radius: 50%; border: 1px solid var(--line);
+  background: var(--panel-2); color: var(--text); padding: 0;
+  font-size: min(var(--fs-sm), 3.9vw); font-family: inherit; cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+.ball-grid button.picked {
+  background: var(--accent); border-color: var(--accent);
+  color: var(--on-accent); font-weight: 700;
+}
+
+/* Prize-group table, shared by the TOTO result card and the TOTO stats tab. */
+.grouptable { width: 100%; border-collapse: collapse; margin-top: 14px; font-size: var(--fs-sm); }
+.grouptable th {
+  text-align: left; font-size: var(--fs-xs); color: var(--muted);
+  text-transform: uppercase; letter-spacing: .4px; font-weight: 600;
+  padding: 8px 4px; border-bottom: 1px solid var(--line);
+}
+.grouptable td {
+  padding: 10px 4px; border-bottom: 1px solid var(--line);
+  font-variant-numeric: tabular-nums;
+}
+.grouptable td.right, .grouptable th.right { text-align: right; }
+.grouptable tr:last-child td { border-bottom: 0; }
+.grouptable .nowin { color: var(--miss); }
+
+.recent .what.small-balls { font-size: min(var(--fs-base), 4.2vw); letter-spacing: .5px; font-weight: 600; }
+
+/* Sweep tickets are 7 digits, so they need more room than a 4D number and
+ * less letter-spacing, in both the prize boxes and the entry field. */
+.prize .num.sweep { font-size: min(var(--fs-xl), 7vw); letter-spacing: 0; }
+.input.big-num.sweep-num { font-size: min(var(--fs-input), 9vw); letter-spacing: 4px; }
+.numgrid.sweepgrid { grid-template-columns: repeat(3, 1fr); }
+.numgrid.sweepgrid span { font-size: min(var(--fs-base), 4.4vw); letter-spacing: 0; }
+.numgrid.twod { grid-template-columns: repeat(5, 1fr); }
+
+/* Which game a saved row belongs to. */
+.gametag {
+  display: inline-block; margin-left: 9px; padding: 3px 9px;
+  border-radius: 999px; background: var(--panel-2); border: 1px solid var(--line);
+  color: var(--muted); font-size: var(--fs-xs); font-weight: 600; letter-spacing: 0;
+  vertical-align: middle;
+}
+
+.hitrow .amt.unknown { color: var(--warn); font-weight: 600; font-size: var(--fs-sm); }

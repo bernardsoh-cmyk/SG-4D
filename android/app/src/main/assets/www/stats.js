@@ -116,6 +116,92 @@ window.SGStats = (function () {
     return s;
   }
 
+  /* ------------------------------- TOTO -------------------------------
+   *
+   * Singapore Sweep gets nothing here on purpose. Its tickets are issued in
+   * sequence rather than drawn from a pool, so "frequent numbers" would be a
+   * statistic about which serials happen to have been printed, which tells
+   * you nothing at all. Inventing one would be worse than leaving it out. */
+
+  /**
+   * Ball frequency over `draws`.
+   *
+   * `expected` is the honest yardstick: six of 49 balls are drawn, so each
+   * should appear draws * 6/49 times. Showing that beside the count is the
+   * difference between a statistic and a superstition.
+   */
+  function ballFrequency(draws, includeAdditional) {
+    var counts = zeros(50), lastSeen = new Array(50);
+    draws.forEach(function (d, index) {
+      var balls = d.numbers.slice();
+      if (includeAdditional && d.additional) balls.push(d.additional);
+      balls.forEach(function (n) {
+        counts[n]++;
+        if (lastSeen[n] === undefined) lastSeen[n] = index;
+      });
+    });
+    var out = [];
+    for (var n = 1; n <= 49; n++) {
+      out.push({
+        number: n, count: counts[n],
+        drawsSince: lastSeen[n] === undefined ? null : lastSeen[n],
+        lastDate: lastSeen[n] === undefined ? null : draws[lastSeen[n]].date
+      });
+    }
+    return {
+      balls: out,
+      expected: draws.length * (includeAdditional ? 7 : 6) / 49,
+      drawCount: draws.length
+    };
+  }
+
+  /** Shape of the winning sets: odd/even, low/high, and the sum. */
+  function shapeStats(draws) {
+    var oddSplit = zeros(7), lowSplit = zeros(7), sums = [];
+    draws.forEach(function (d) {
+      var odd = 0, low = 0, sum = 0;
+      d.numbers.forEach(function (n) {
+        if (n % 2) odd++;
+        if (n <= 24) low++;
+        sum += n;
+      });
+      oddSplit[odd]++; lowSplit[low]++; sums.push(sum);
+    });
+    sums.sort(function (a, b) { return a - b; });
+    return {
+      oddSplit: oddSplit, lowSplit: lowSplit,
+      sumMin: sums[0], sumMax: sums[sums.length - 1],
+      sumMedian: sums.length ? sums[Math.floor(sums.length / 2)] : null
+    };
+  }
+
+  /** How often each prize group was actually won, and its biggest share. */
+  function groupHistory(draws) {
+    var out = {};
+    for (var g = 1; g <= 7; g++) out[g] = { group: g, drawsWon: 0, biggestShare: null };
+    draws.forEach(function (d) {
+      (d.groups || []).forEach(function (row) {
+        var slot = out[row.group];
+        if (!slot) return;
+        if (row.shares > 0) slot.drawsWon++;
+        if (row.prize !== null && (slot.biggestShare === null || row.prize > slot.biggestShare)) {
+          slot.biggestShare = row.prize;
+        }
+      });
+    });
+    return Object.keys(out).map(function (k) { return out[k]; });
+  }
+
+  function randomToto(count) {
+    var pool = [];
+    for (var n = 1; n <= 49; n++) pool.push(n);
+    var out = [];
+    for (var i = 0; i < (count || 6); i++) {
+      out.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
+    }
+    return out.sort(function (a, b) { return a - b; });
+  }
+
   return {
     allNumbers: allNumbers,
     topNumbers: topNumbers,
@@ -123,6 +209,10 @@ window.SGStats = (function () {
     numberTally: numberTally,
     drawsSince: drawsSince,
     appearances: appearances,
-    randomFourD: randomFourD
+    randomFourD: randomFourD,
+    ballFrequency: ballFrequency,
+    shapeStats: shapeStats,
+    groupHistory: groupHistory,
+    randomToto: randomToto
   };
 })();

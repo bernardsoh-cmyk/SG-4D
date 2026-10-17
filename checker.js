@@ -185,14 +185,166 @@ window.SGCheck = (function () {
     };
   }
 
+  /* =============================== TOTO ===============================
+   *
+   * TOTO Game Rules cl. 5.5. Unlike 4D, this is not a fixed-prize game:
+   * Groups 1-4 are a share of that draw's prize pool, so the amount does not
+   * exist until the draw is over and Singapore Pools publishes the share.
+   * Only Groups 5, 6 and 7 are fixed. The checker reports an exact figure for
+   * 5-7, the published share for 1-4 where the draw carries it, and null
+   * where it does not. It never estimates a jackpot. */
+
+  var TOTO_FIXED = { 5: 50, 6: 25, 7: 10 };
+  var TOTO_GROUP_LABEL = {
+    1: 'Group 1 (Jackpot)', 2: 'Group 2', 3: 'Group 3', 4: 'Group 4',
+    5: 'Group 5', 6: 'Group 6', 7: 'Group 7'
+  };
+  var TOTO_GROUP_RULE = {
+    1: '6 numbers', 2: '5 + additional', 3: '5 numbers', 4: '4 + additional',
+    5: '4 numbers', 6: '3 + additional', 7: '3 numbers'
+  };
+
+  /** Prize group for one set of six, or 0 for none. Rule 5.9: highest only. */
+  function totoGroup(set, winning, additional) {
+    var matched = set.filter(function (n) { return winning.indexOf(n) !== -1; }).length;
+    var bonus = set.indexOf(additional) !== -1;
+    if (matched === 6) return 1;
+    if (matched === 5) return bonus ? 2 : 3;
+    if (matched === 4) return bonus ? 4 : 5;
+    if (matched === 3) return bonus ? 6 : 7;
+    return 0;
+  }
+
+  function combinations(arr, k) {
+    var out = [];
+    (function pick(start, acc) {
+      if (acc.length === k) { out.push(acc.slice()); return; }
+      for (var i = start; i < arr.length; i++) { acc.push(arr[i]); pick(i + 1, acc); acc.pop(); }
+    })(0, []);
+    return out;
+  }
+
+  /**
+   * Check a TOTO entry against one draw.
+   *
+   *   picks  6-12 distinct numbers from 1-49. Seven or more is a System
+   *          Entry, which the rules treat as every C(n,6) subset (cl. 5.8),
+   *          each scored on its own.
+   */
+  function checkToto(picks, draw) {
+    var clean = [];
+    (picks || []).forEach(function (n) {
+      n = parseInt(n, 10);
+      if (n >= 1 && n <= 49 && clean.indexOf(n) === -1) clean.push(n);
+    });
+    if (clean.length < 6) return { error: 'Pick at least 6 different numbers from 1 to 49.' };
+    if (clean.length > 12) return { error: 'A System Entry goes up to 12 numbers.' };
+
+    clean.sort(function (a, b) { return a - b; });
+    var sets = combinations(clean, 6);
+    var counts = {};
+    sets.forEach(function (set) {
+      var g = totoGroup(set, draw.numbers, draw.additional);
+      if (g) counts[g] = (counts[g] || 0) + 1;
+    });
+
+    var published = {};
+    (draw.groups || []).forEach(function (g) { published[g.group] = g; });
+
+    var lines = [], exact = 0, hasUnknown = false;
+    Object.keys(counts).map(Number).sort(function (a, b) { return a - b; }).forEach(function (g) {
+      var shares = counts[g];
+      var line = {
+        group: g, label: TOTO_GROUP_LABEL[g], rule: TOTO_GROUP_RULE[g],
+        shares: shares, amount: null, fixed: false, note: ''
+      };
+      if (TOTO_FIXED[g]) {
+        line.fixed = true;
+        line.amount = TOTO_FIXED[g] * shares;
+        exact += line.amount;
+      } else if (published[g] && published[g].prize !== null && published[g].prize !== undefined) {
+        line.amount = published[g].prize * shares;
+        exact += line.amount;
+        line.note = 'share published for this draw';
+      } else {
+        hasUnknown = true;
+        line.note = 'a share of the prize pool — amount set after the draw';
+      }
+      lines.push(line);
+    });
+
+    return {
+      sets: sets.length,
+      system: clean.length > 6 ? ('System ' + clean.length) : 'Ordinary',
+      lines: lines, total: exact, totalIsPartial: hasUnknown, picks: clean
+    };
+  }
+
+  /* ============================ SINGAPORE SWEEP ============================
+   *
+   * The simplest of the three: a ticket either appears in a prize list or it
+   * does not. Every amount is fixed and printed in the draw's own headings,
+   * so nothing here is inferred — the figures come from the result itself
+   * rather than from a table in this file that could drift out of date.
+   *
+   * 2D Delight is the exception to exact matching: it pays on the last two
+   * digits, so it is checked as a suffix. */
+
+  function sweepTicket(s) { return String(s || '').replace(/\D/g, ''); }
+
+  /**
+   * Check one 7-digit Sweep ticket against one draw.
+   * Returns every prize it wins — the top three are exact matches, the group
+   * prizes are list membership, and 2D Delight is a suffix match.
+   */
+  function checkSweep(ticket, draw) {
+    var t = sweepTicket(ticket);
+    if (t.length !== 7) return { error: 'A Singapore Sweep ticket number has 7 digits.' };
+
+    var lines = [], total = 0;
+
+    [['1st Prize', draw.first], ['2nd Prize', draw.second], ['3rd Prize', draw.third]]
+      .forEach(function (p) {
+        if (p[1] && sweepTicket(p[1]) === t) {
+          // The top three amounts are not in the group headings, so they are
+          // reported as a win without a figure rather than with a wrong one.
+          lines.push({ label: p[0], amount: null, note: 'top prize — see Singapore Pools for the amount' });
+        }
+      });
+
+    (draw.groups || []).forEach(function (g) {
+      var isTwoD = g.label.indexOf('2D') !== -1;
+      var hit = isTwoD
+        ? g.numbers.indexOf(t.slice(-2)) !== -1
+        : g.numbers.indexOf(t) !== -1;
+      if (!hit) return;
+      lines.push({
+        label: g.label + (isTwoD ? ' (last 2 digits)' : ''),
+        amount: g.amount,
+        note: ''
+      });
+      total += g.amount || 0;
+    });
+
+    return { ticket: t, lines: lines, total: total };
+  }
+
   return {
     checkFourD: checkFourD,
+    checkToto: checkToto,
+    checkSweep: checkSweep,
+    totoGroup: totoGroup,
+    combinations: combinations,
     digitPattern: digitPattern,
     permutationCount: permutationCount,
     permutations: permutations,
     rollNumbers: rollNumbers,
     hitsIn: hitsIn,
+    sweepTicket: sweepTicket,
     FOURD_FIXED: FOURD_FIXED,
-    FOURD_IBET: FOURD_IBET
+    FOURD_IBET: FOURD_IBET,
+    TOTO_FIXED: TOTO_FIXED,
+    TOTO_GROUP_LABEL: TOTO_GROUP_LABEL,
+    TOTO_GROUP_RULE: TOTO_GROUP_RULE
   };
 })();

@@ -1,169 +1,103 @@
 /*
- * SG 4D — results data layer.
+ * SG Lottery — results data layer for 4D, TOTO and Singapore Sweep.
  *
- * Three sources, tried in this order, all merged into one history:
+ * Three sources, tried in this order, merged per game:
  *
  *   1. The bundled seed (data/history.json)
  *      Ships inside the APK. A first launch with no network still opens to
- *      hundreds of real draws instead of a spinner, and the statistics have
- *      something to chew on immediately.
+ *      real history instead of a spinner.
  *
  *   2. The hosted feed (FEED_URL)
  *      A GitHub Actions cron runs tools/scrape.py after each draw and commits
- *      the JSON. One request per launch, cached in localStorage. This is the
- *      normal path once the feed is published.
+ *      the JSON. One request per launch, cached in localStorage.
  *
  *   3. The native bridge (AndroidNet), only inside the app
  *      Singapore Pools sends no Access-Control-Allow-Origin header, so the
- *      WebView can never fetch them from JavaScript — the request is blocked
- *      before it leaves. Java is not bound by CORS, so AndroidNet will fetch a
- *      page and hand back the markup, and we parse it here with the same
- *      anchors the Python scraper uses. This is a fallback, not the plan: it
- *      exists so the app is correct on day one before the feed is live, and so
- *      a stale feed does not leave a user staring at last week's draw. It only
- *      ever pulls the handful of draws we are actually missing.
+ *      WebView can never fetch them from JavaScript. Java is not bound by
+ *      CORS, so AndroidNet fetches the page and we parse it here with the same
+ *      anchors tools/scrape.py uses. It exists because the feed is only as
+ *      prompt as its cron, and GitHub's scheduler runs hours late.
  *
- * Everything merges by draw number, newest wins, and the result is cached. A
- * draw we already hold is never re-fetched. When every source fails we serve
- * the cache and say so — state.stale is set, and app.js labels it. A result
- * that might not be the latest is labelled as such; it is never passed off as
- * current.
+ * Everything merges by draw number within a game, newest wins, and the result
+ * is cached. Staleness is per game, because the three draw on entirely
+ * different rhythms: 4D on Wed/Sat/Sun, TOTO on Mon/Thu, Sweep on the first
+ * Wednesday of the month. A result that might not be the latest is labelled
+ * as such; it is never passed off as current.
  */
 window.SGData = (function () {
   'use strict';
 
-  /* Published by .github/workflows/scrape.yml after each draw and served from
-   * GitHub Pages, which sends Access-Control-Allow-Origin: * — the whole reason
-   * this indirection exists, since singaporepools.com.sg sends no such header.
-   *
-   * If it 404s or goes away, nothing breaks loudly: the fetch below is caught,
-   * the app keeps serving the bundled seed, and the native fallback fills the
-   * gap inside the APK. */
   var FEED_URL = 'https://wrsoh2502-cell.github.io/SG-4D/data/history.json';
-
   var SEED_URL = './data/history.json';
-  var CACHE_KEY = 'sg4d.history.v1';
-  var FRESH_MS = 30 * 60 * 1000;     // don't re-hit the feed more than twice an hour
+  var CACHE_KEY = 'sg4d.history.v2';        // v2: multi-game shape
+  var FRESH_MS = 30 * 60 * 1000;
 
-  /* 4D draws Wednesday, Saturday and Sunday at 6.30pm SGT. Used only to decide
-   * whether we are *expecting* something newer than what we hold — never to
-   * invent a result. */
-  var DRAW_DAYS = [0, 3, 6];         // 0 = Sunday
-  var DRAW_HOUR = 18.5;
-  /* Measured, not guessed: on 11 Oct the 18:30 draw's file carried a
-   * Last-Modified of 18:52 SGT. 20 minutes is the point from which it is
-   * worth looking; before that the app is not yet entitled to call itself
-   * behind. */
+  /* Measured, not guessed: on 11 Oct the 18:30 4D draw's file carried a
+   * Last-Modified of 18:52 SGT. 20 minutes is the point from which it is worth
+   * looking; before that the app is not yet entitled to call itself behind. */
   var RESULTS_LAG_MS = 20 * 60 * 1000;
 
+  var ARCHIVE = 'https://www.singaporepools.com.sg/DataFileArchive/Lottery/Output/';
+
   var state = {
-    draws: [],
+    games: { fourd: [], toto: [], sweep: [] },
+    stale: { fourd: false, toto: false, sweep: false },
     generated: null,
-    stale: false,
     source: 'seed',
     error: null
   };
 
   /* ---------------- time ---------------- */
 
-  // SGT is UTC+8 year-round — no DST, so the offset is a constant and this is
-  // exact rather than approximate.
+  // SGT is UTC+8 year-round — no DST, so the offset is a constant.
   function sgNow() {
     return new Date(Date.now() + (8 * 60 + new Date().getTimezoneOffset()) * 60000);
   }
 
   function pad(n) { return (n < 10 ? '0' : '') + n; }
-
   function isoOf(d) {
     return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
   }
 
-  /** The most recent date on which a draw should already be published. */
-  function lastExpectedDraw() {
-    var d = sgNow();
-    for (var back = 0; back < 10; back++) {
+  /** Is `d` a draw day for this game? */
+  function isDrawDay(cfg, d) {
+    if (cfg.monthly) {
+      // Singapore Sweep draws on the first Wednesday of the month.
+      return d.getDay() === 3 && d.getDate() <= 7;
+    }
+    return cfg.days.indexOf(d.getDay()) !== -1;
+  }
+
+  function drawTimeOn(cfg, day) {
+    var t = new Date(day);
+    t.setHours(Math.floor(cfg.hour), (cfg.hour % 1) * 60, 0, 0);
+    return t;
+  }
+
+  /** Most recent date on which a draw of this game should already be published. */
+  function lastExpectedDraw(game) {
+    var cfg = GAMES[game], d = sgNow();
+    for (var back = 0; back < 40; back++) {
       var probe = new Date(d.getTime() - back * 86400000);
-      if (DRAW_DAYS.indexOf(probe.getDay()) === -1) continue;
-      var drawAt = new Date(probe);
-      drawAt.setHours(Math.floor(DRAW_HOUR), (DRAW_HOUR % 1) * 60, 0, 0);
-      if (d.getTime() >= drawAt.getTime() + RESULTS_LAG_MS) return isoOf(probe);
+      if (!isDrawDay(cfg, probe)) continue;
+      if (d.getTime() >= drawTimeOn(cfg, probe).getTime() + RESULTS_LAG_MS) return isoOf(probe);
     }
     return null;
   }
 
-  /** Next draw date/time, as a Date in SGT terms. */
-  function nextDraw() {
-    var d = sgNow();
-    for (var fwd = 0; fwd < 10; fwd++) {
+  /** Next draw date/time for this game. */
+  function nextDraw(game) {
+    var cfg = GAMES[game], d = sgNow();
+    for (var fwd = 0; fwd < 40; fwd++) {
       var probe = new Date(d.getTime() + fwd * 86400000);
-      if (DRAW_DAYS.indexOf(probe.getDay()) === -1) continue;
-      var drawAt = new Date(probe);
-      drawAt.setHours(Math.floor(DRAW_HOUR), (DRAW_HOUR % 1) * 60, 0, 0);
-      if (drawAt.getTime() > d.getTime()) return drawAt;
+      if (!isDrawDay(cfg, probe)) continue;
+      var at = drawTimeOn(cfg, probe);
+      if (at.getTime() > d.getTime()) return at;
     }
     return null;
   }
 
-  /* ---------------- merging ---------------- */
-
-  function mergeInto(target, incoming) {
-    if (!incoming || !incoming.length) return target;
-    var byDraw = {};
-    var i;
-    for (i = 0; i < target.length; i++) byDraw[target[i].draw] = target[i];
-    for (i = 0; i < incoming.length; i++) {
-      if (incoming[i] && incoming[i].draw) byDraw[incoming[i].draw] = incoming[i];
-    }
-    var out = [];
-    for (var k in byDraw) if (byDraw.hasOwnProperty(k)) out.push(byDraw[k]);
-    out.sort(function (a, b) { return b.draw - a.draw; });
-    return out;
-  }
-
-  /* Least to most authoritative. state.source reports the best source we
-   * actually managed to read, which is not the same as the one that happened
-   * to add a row. */
-  var SOURCE_RANK = { cache: 0, seed: 1, feed: 2, live: 3 };
-
-  function absorb(payload, source) {
-    if (!payload) return false;
-    var before = state.draws.length;
-    state.draws = mergeInto(state.draws, payload.fourd);
-    if (payload.generated && (!state.generated || payload.generated > state.generated)) {
-      state.generated = payload.generated;
-    }
-    // Recorded on a successful read, NOT on whether it grew the history. The
-    // steady state for a healthy feed is that it adds nothing — every draw it
-    // carries is already in the bundled seed — and reporting "seed" then would
-    // tell the user we had failed to reach the network when we had not.
-    if (SOURCE_RANK[source] >= SOURCE_RANK[state.source]) state.source = source;
-    return state.draws.length > before;
-  }
-
-  function readCache() {
-    try {
-      var raw = localStorage.getItem(CACHE_KEY);
-      return raw ? JSON.parse(raw) : null;
-    } catch (e) { return null; }
-  }
-
-  function writeCache() {
-    try {
-      localStorage.setItem(CACHE_KEY, JSON.stringify({
-        generated: state.generated,
-        fetchedAt: Date.now(),
-        fourd: state.draws
-      }));
-    } catch (e) { /* quota or private mode — the seed still carries the app */ }
-  }
-
-  function recomputeStale() {
-    var newest = state.draws[0];
-    var expected = lastExpectedDraw();
-    state.stale = !!(expected && (!newest || newest.date < expected));
-  }
-
-  /* ---------------- HTML parsing (native fallback only) ----------------
+  /* ---------------- parsing (native fallback only) ----------------
    *
    * Deliberately the same anchors as tools/scrape.py. If the site changes its
    * markup, both break together and both fail loudly rather than one of them
@@ -175,10 +109,7 @@ window.SGData = (function () {
     return (el.textContent || '').replace(/\s+/g, ' ').trim();
   }
 
-  function grab(re, body) {
-    var m = re.exec(body);
-    return m ? m[1] : null;
-  }
+  function grab(re, body) { var m = re.exec(body); return m ? m[1] : null; }
 
   var MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun',
                 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
@@ -191,12 +122,23 @@ window.SGData = (function () {
     return m[3] + '-' + pad(mon + 1) + '-' + pad(parseInt(m[1], 10));
   }
 
-  function parseFourD(body) {
+  function headerOf(body) {
     var date = isoDate(textOf(grab(/<th[^>]*class='drawDate'[^>]*>([\s\S]*?)<\/th>/, body)));
     var numText = textOf(grab(/<th[^>]*class='drawNumber'[^>]*>([\s\S]*?)<\/th>/, body));
     var draw = numText ? parseInt(numText.replace(/\D/g, ''), 10) : NaN;
-    if (!date || !draw) return null;
+    return (date && draw) ? { date: date, draw: draw } : null;
+  }
 
+  function moneyOf(s) {
+    s = (s || '').trim();
+    if (!s || s === '-' || s === '--' || s === '–') return null;
+    var c = s.replace(/[^\d.]/g, '');
+    return c ? parseFloat(c) : null;
+  }
+
+  function parseFourD(body) {
+    var h = headerOf(body);
+    if (!h) return null;
     function prize(cls) {
       return textOf(grab(new RegExp("<td[^>]*class='" + cls + "'[^>]*>([\\s\\S]*?)</td>"), body));
     }
@@ -210,15 +152,191 @@ window.SGData = (function () {
       }
       return out;
     }
-
     var first = prize('tdFirstPrize');
     if (!first) return null;
     return {
-      draw: draw, date: date,
-      first: first, second: prize('tdSecondPrize'), third: prize('tdThirdPrize'),
-      starter: block('tbodyStarterPrizes'),
-      consolation: block('tbodyConsolationPrizes')
+      draw: h.draw, date: h.date, first: first,
+      second: prize('tdSecondPrize'), third: prize('tdThirdPrize'),
+      starter: block('tbodyStarterPrizes'), consolation: block('tbodyConsolationPrizes')
     };
+  }
+
+  function parseToto(body) {
+    var h = headerOf(body);
+    if (!h) return null;
+    var numbers = [];
+    for (var i = 1; i <= 6; i++) {
+      var v = textOf(grab(new RegExp("<td[^>]*class='win" + i + "'[^>]*>([\\s\\S]*?)</td>"), body));
+      if (!v) return null;
+      numbers.push(parseInt(v, 10));
+    }
+    var add = textOf(grab(/<td[^>]*class='additional'[^>]*>([\s\S]*?)<\/td>/, body));
+    if (!add) return null;
+
+    var groups = [];
+    var tables = body.match(/<table[^>]*>[\s\S]*?<\/table>/g) || [];
+    for (var t = 0; t < tables.length; t++) {
+      var rows = tables[t].match(/<tr[^>]*>[\s\S]*?<\/tr>/g) || [];
+      var parsed = [];
+      for (var r = 0; r < rows.length; r++) {
+        var cells = [], cre = /<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/g, cm;
+        while ((cm = cre.exec(rows[r]))) cells.push(textOf(cm[1]));
+        if (cells.length >= 3 && /^Group\s*[1-7]$/.test(cells[0])) {
+          var sh = moneyOf(cells[2]);
+          parsed.push({
+            group: parseInt(cells[0].replace(/\D/g, ''), 10),
+            prize: moneyOf(cells[1]),
+            shares: sh === null ? 0 : sh
+          });
+        }
+      }
+      if (parsed.length >= 5) { groups = parsed; break; }
+    }
+
+    return {
+      draw: h.draw, date: h.date,
+      numbers: numbers.slice().sort(function (a, b) { return a - b; }),
+      additional: parseInt(add, 10),
+      jackpot: moneyOf(textOf(grab(/<td[^>]*class='jackpotPrize'[^>]*>([\s\S]*?)<\/td>/, body))),
+      groups: groups
+    };
+  }
+
+  var SWEEP_HEADING = /^([\d,]+)\s+(.*?)\s+Prizes?\s*@\s*\$?([\d,]+)/i;
+
+  function parseSweep(body) {
+    var h = headerOf(body);
+    if (!h) return null;
+    function top(cls) {
+      var v = textOf(grab(new RegExp("class='" + cls + "'[^>]*>([\\s\\S]*?)</"), body));
+      return v ? v.replace(/\D/g, '') : null;
+    }
+    var groups = [], seen = {};
+    var re = /class='prizeGroupHeading'[^>]*>([\s\S]*?)<\/[^>]+>([\s\S]*?)(?=class='prizeGroupHeading'|$)/g;
+    var m;
+    while ((m = re.exec(body))) {
+      var heading = textOf(m[1]);
+      if (!heading || seen[heading]) continue;
+      var hm = SWEEP_HEADING.exec(heading);
+      if (!hm) continue;
+      seen[heading] = true;
+      var label = hm[2].trim();
+      // From the <li>/<td> elements, not the flattened text: a neighbouring
+      // draw date otherwise contributes a phantom two-digit "winner".
+      var cells = [], cre = /<(?:li|td)[^>]*>([\s\S]*?)<\/(?:li|td)>/g, cm;
+      while ((cm = cre.exec(m[2]))) cells.push(textOf(cm[1]));
+      var nums = [];
+      cells.forEach(function (c) {
+        if (label.indexOf('2D') !== -1) { if (/^\d{2}$/.test(c)) nums.push(c); }
+        else if (/^\d{3}\s?\d{4}$/.test(c)) nums.push(c.replace(/\D/g, ''));
+      });
+      groups.push({
+        label: label,
+        count: parseInt(hm[1].replace(/,/g, ''), 10),
+        amount: parseFloat(hm[3].replace(/,/g, '')),
+        numbers: nums
+      });
+    }
+    if (!groups.length) return null;
+    return {
+      draw: h.draw, date: h.date,
+      first: top('valueFirstPrize'), second: top('valueSecondPrize'),
+      third: top('valueThirdPrize'), groups: groups
+    };
+  }
+
+  function splitLi(body) {
+    return body.split('<li>').filter(function (c) { return c.indexOf('drawNumber') !== -1; });
+  }
+
+  /* Sweep renders every draw twice. The mobile block labels the date with
+   * <span class='drawDate'>, the desktop one with <th>, so matching the <th>
+   * form picks exactly one complete chunk per draw. */
+  function splitSweep(body) {
+    var desktop = /<th[^>]*class='drawDate'/;
+    var out = body.split(/(?=<div class='tables-wrap)/).filter(function (c) {
+      return desktop.test(c);
+    });
+    return out.length ? out : (desktop.test(body) ? [body] : []);
+  }
+
+  var GAMES = {
+    fourd: {
+      label: '4D', days: [0, 3, 6], hour: 18.5,
+      top: ARCHIVE + 'fourd_result_top_draws_en.html', split: splitLi, parse: parseFourD
+    },
+    toto: {
+      label: 'TOTO', days: [1, 4], hour: 18.5,
+      top: ARCHIVE + 'toto_result_top_draws_en.html', split: splitLi, parse: parseToto
+    },
+    sweep: {
+      label: 'Sweep', monthly: true, hour: 18,
+      top: ARCHIVE + 'sweep_result_top_draws_en.html', split: splitSweep, parse: parseSweep
+    }
+  };
+  var GAME_KEYS = ['fourd', 'toto', 'sweep'];
+
+  /* ---------------- merging ---------------- */
+
+  function mergeInto(target, incoming) {
+    if (!incoming || !incoming.length) return target;
+    var byDraw = {}, i;
+    for (i = 0; i < target.length; i++) byDraw[target[i].draw] = target[i];
+    for (i = 0; i < incoming.length; i++) {
+      if (incoming[i] && incoming[i].draw) byDraw[incoming[i].draw] = incoming[i];
+    }
+    var out = [];
+    for (var k in byDraw) if (byDraw.hasOwnProperty(k)) out.push(byDraw[k]);
+    out.sort(function (a, b) { return b.draw - a.draw; });
+    return out;
+  }
+
+  /* Least to most authoritative. state.source reports the best source we
+   * actually managed to read, not the one that happened to add a row. */
+  var SOURCE_RANK = { cache: 0, seed: 1, feed: 2, live: 3 };
+
+  function absorb(payload, source) {
+    if (!payload) return false;
+    var grew = false;
+    GAME_KEYS.forEach(function (g) {
+      if (!payload[g]) return;
+      var before = state.games[g].length;
+      state.games[g] = mergeInto(state.games[g], payload[g]);
+      if (state.games[g].length > before) grew = true;
+    });
+    if (payload.generated && (!state.generated || payload.generated > state.generated)) {
+      state.generated = payload.generated;
+    }
+    // Recorded on a successful read, NOT on whether it grew the history: the
+    // steady state of a healthy feed is that it adds nothing.
+    if (SOURCE_RANK[source] >= SOURCE_RANK[state.source]) state.source = source;
+    return grew;
+  }
+
+  function readCache() {
+    try { var raw = localStorage.getItem(CACHE_KEY); return raw ? JSON.parse(raw) : null; }
+    catch (e) { return null; }
+  }
+
+  function writeCache() {
+    try {
+      localStorage.setItem(CACHE_KEY, JSON.stringify({
+        generated: state.generated, fetchedAt: Date.now(),
+        fourd: state.games.fourd, toto: state.games.toto, sweep: state.games.sweep
+      }));
+    } catch (e) { /* quota or private mode — the seed still carries the app */ }
+  }
+
+  function recomputeStale() {
+    GAME_KEYS.forEach(function (g) {
+      var newest = state.games[g][0];
+      var expected = lastExpectedDraw(g);
+      state.stale[g] = !!(expected && (!newest || newest.date < expected));
+    });
+  }
+
+  function anyStale() {
+    return GAME_KEYS.some(function (g) { return state.stale[g]; });
   }
 
   /* ---------------- fetching ---------------- */
@@ -231,28 +349,14 @@ window.SGData = (function () {
   }
 
   var nativeNet = (function () {
-    try {
-      if (window.AndroidNet && window.AndroidNet.available()) return window.AndroidNet;
-    } catch (e) { /* not in the app */ }
+    try { if (window.AndroidNet && window.AndroidNet.available()) return window.AndroidNet; }
+    catch (e) { /* not in the app */ }
     return null;
   })();
 
-  var HOST = 'https://www.singaporepools.com.sg';
-
-  /* The six most recent draws, complete, in one 18 KB static file — 1st/2nd/3rd,
-   * all ten starters and all ten consolations, behind the same class anchors as
-   * the full results page. It replaces what used to be an index fetch plus one
-   * 95 KB page per missing draw.
-   *
-   * It also answers a conditional request with 304 and no body, which is what
-   * makes polling for a fresh result affordable: when nothing has been
-   * published, a check costs nothing. */
-  var TOP_DRAWS_URL = HOST + '/DataFileArchive/Lottery/Output/fourd_result_top_draws_en.html';
-
-  /* The bridge is asynchronous — see NetBridge.java. It calls back into
-   * __netCallback rather than returning, because a @JavascriptInterface method
-   * blocks the calling JavaScript until it returns, and freezing the page for
-   * the length of a network request is not an acceptable way to refresh. */
+  /* The bridge is asynchronous — see NetBridge.java. A @JavascriptInterface
+   * method blocks the calling JavaScript until it returns, so a synchronous
+   * fetch would freeze the page for the length of every request. */
   var pending = {};
   var nextRequestId = 0;
 
@@ -265,7 +369,6 @@ window.SGData = (function () {
     else slot.reject(new Error(payload));
   };
 
-  /** Resolves { body, status }. status 304 means "unchanged", with no body. */
   function nativeGet(url, ifModifiedSince) {
     return new Promise(function (resolve, reject) {
       var id = 'r' + (++nextRequestId);
@@ -279,16 +382,13 @@ window.SGData = (function () {
           resolve(res);
         },
         reject: reject,
-        // If the bridge never calls back the promise would hang forever and
-        // take the refresh spinner with it.
         timer: setTimeout(function () {
           delete pending[id];
           reject(new Error('timed out: ' + url));
         }, 30000)
       };
-      try {
-        nativeNet.request(url, id, ifModifiedSince || '');
-      } catch (e) {
+      try { nativeNet.request(url, id, ifModifiedSince || ''); }
+      catch (e) {
         clearTimeout(pending[id].timer);
         delete pending[id];
         reject(e);
@@ -296,37 +396,38 @@ window.SGData = (function () {
     });
   }
 
-  /* Last-Modified of the top-draws file as we last saw it, so the next check
-   * can be conditional. Held in memory only: a stale value costs one 18 KB
-   * response, never a wrong result. */
-  var topDrawsSeenAt = null;
+  /* Last-Modified per game, so each check can be conditional. In memory only:
+   * a stale value costs one small response, never a wrong result. */
+  var seenAt = {};
 
-  /** Split the top-draws file into its six draws and parse each one. */
-  function parseTopDraws(body) {
-    var out = [];
-    // One <li> per draw, each a self-contained copy of the same markup the
-    // single-draw page uses, so parseFourD works on a chunk unchanged.
-    body.split('<li>').forEach(function (chunk) {
-      if (chunk.indexOf('drawNumber') === -1) return;
-      var rec = parseFourD(chunk);
-      if (rec) out.push(rec);
+  /** Read one game's newest draws straight from Singapore Pools. */
+  function nativeLatest(game, conditional) {
+    var cfg = GAMES[game];
+    return nativeGet(cfg.top, conditional ? seenAt[game] : null).then(function (res) {
+      if (res.status === 304) return [];
+      seenAt[game] = res.lastModified || seenAt[game];
+      var out = [];
+      cfg.split(res.body).forEach(function (chunk) {
+        var rec = cfg.parse(chunk);
+        if (rec) out.push(rec);
+      });
+      return out;
     });
-    return out;
   }
 
-  /**
-   * Read the newest draws straight from Singapore Pools.
-   *
-   * Resolves the draws found, or [] when the file has not changed since we
-   * last looked (HTTP 304). Rejects only on a real failure.
-   */
-  function nativeLatest(conditional) {
-    return nativeGet(TOP_DRAWS_URL, conditional ? topDrawsSeenAt : null)
-      .then(function (res) {
-        if (res.status === 304) return [];
-        topDrawsSeenAt = res.lastModified || topDrawsSeenAt;
-        return parseTopDraws(res.body);
-      });
+  /** Pull every game that is currently behind, in parallel. */
+  function catchUpStale(conditional) {
+    var behind = GAME_KEYS.filter(function (g) { return state.stale[g]; });
+    if (!behind.length) return Promise.resolve(false);
+    return Promise.all(behind.map(function (g) {
+      return nativeLatest(g, conditional).then(function (rows) {
+        var p = {}; p[g] = rows;
+        return rows.length ? absorb(p, 'live') : false;
+        // one game failing must not sink the others
+      }).catch(function (e) { state.error = e.message; return false; });
+    })).then(function (results) {
+      return results.some(Boolean);
+    });
   }
 
   /* ---------------- public ---------------- */
@@ -334,9 +435,7 @@ window.SGData = (function () {
   function load(opts) {
     opts = opts || {};
     state.error = null;
-    // Reset so source describes THIS load. Without it a refresh that failed to
-    // reach the feed would keep reporting the source of an earlier successful
-    // one, and the header would claim "up to date" off the back of it.
+    // Reset so source describes THIS load.
     state.source = 'cache';
 
     var cached = readCache();
@@ -355,13 +454,10 @@ window.SGData = (function () {
         .catch(function (e) { state.error = e.message; });
     }).then(function () {
       recomputeStale();
-      // Only reach for the site itself when the feed did not get us current.
-      if (!state.stale || !nativeNet) return null;
-      return nativeLatest(false).then(function (r) {
-        absorb({ fourd: r }, 'live');
-        state.generated = new Date().toISOString();
-        state.error = null;
-      }).catch(function (e) { state.error = e.message; });
+      if (!nativeNet || !anyStale()) return null;
+      return catchUpStale(false).then(function (grew) {
+        if (grew) { state.generated = new Date().toISOString(); state.error = null; }
+      });
     }).then(function () {
       recomputeStale();
       writeCache();
@@ -370,39 +466,34 @@ window.SGData = (function () {
     });
   }
 
-  /* ---------------- waiting for tonight's draw ----------------
+  /* ---------------- waiting for a draw ----------------
    *
-   * The hosted feed is only as prompt as its cron, and GitHub's scheduler has
-   * been hours late in practice. Inside the app we can do better: once a draw
-   * is due and we still do not have it, check the top-draws file every minute.
+   * The hosted feed is only as prompt as its cron, and GitHub's scheduler runs
+   * hours late. Inside the app we do better: while any game is due and still
+   * missing, check its top-draws file every minute.
    *
-   * This is affordable only because the check is conditional — an unchanged
-   * file answers 304 with no body — so the common case of "not published yet"
-   * transfers nothing. Polling stops the moment the draw lands, never runs
-   * while the app is in the background, and never runs without the bridge. */
+   * Affordable only because the check is conditional — an unchanged file
+   * answers 304 with no body — so "not published yet" transfers nothing.
+   * Polling stops once every game is current, never runs in the background,
+   * and never runs without the bridge. */
 
   var POLL_MS = 60 * 1000;
   var pollTimer = null;
-  var onPollResult = null;        // app.js attaches a re-render here
+  var onPollResult = null;
 
-  function stopPoll() {
-    if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
-  }
+  function hidden() { return typeof document !== 'undefined' && document.hidden; }
+  function stopPoll() { if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; } }
 
   function schedulePoll() {
     stopPoll();
-    if (!nativeNet || !state.stale) return;        // nothing to wait for
-    if (typeof document !== 'undefined' && document.hidden) return;
+    if (!nativeNet || !anyStale() || hidden()) return;
     pollTimer = setTimeout(poll, POLL_MS);
   }
 
   function poll() {
     pollTimer = null;
-    if (!nativeNet || !state.stale) return;
-    if (typeof document !== 'undefined' && document.hidden) return;
-
-    nativeLatest(true).then(function (draws) {
-      var grew = draws.length && absorb({ fourd: draws }, 'live');
+    if (!nativeNet || !anyStale() || hidden()) return;
+    catchUpStale(true).then(function (grew) {
       if (grew) {
         state.generated = new Date().toISOString();
         state.error = null;
@@ -410,16 +501,13 @@ window.SGData = (function () {
         writeCache();
         if (onPollResult) onPollResult(state);
       }
-      schedulePoll();                               // stops itself once current
-    }).catch(function () {
-      schedulePoll();                               // transient failure; try again
-    });
+      schedulePoll();
+    }).catch(function () { schedulePoll(); });
   }
 
   if (typeof document !== 'undefined') {
-    // Resume promptly when the user comes back, rather than at the next tick.
     document.addEventListener('visibilitychange', function () {
-      if (document.hidden) stopPoll(); else if (state.stale) poll();
+      if (document.hidden) stopPoll(); else if (anyStale()) poll();
     });
   }
 
@@ -427,16 +515,20 @@ window.SGData = (function () {
     load: load,
     refresh: function () { return load({ force: true }); },
     get state() { return state; },
-    get draws() { return state.draws; },
+    games: GAME_KEYS,
+    label: function (g) { return GAMES[g].label; },
+    draws: function (g) { return state.games[g] || []; },
+    isStale: function (g) { return !!state.stale[g]; },
+    anyStale: anyStale,
     nextDraw: nextDraw,
     lastExpectedDraw: lastExpectedDraw,
     get hasNative() { return !!nativeNet; },
-    /** app.js sets this to re-render when a polled draw arrives. */
-    set onLiveResult(fn) { onPollResult = fn; },
     get feedConfigured() { return !!FEED_URL; },
+    set onLiveResult(fn) { onPollResult = fn; },
 
-    // exported so the parser can be exercised directly
-    _parseFourD: parseFourD,
+    // exported so the parsers can be exercised directly
+    _parse: { fourd: parseFourD, toto: parseToto, sweep: parseSweep },
+    _split: { fourd: splitLi, toto: splitLi, sweep: splitSweep },
     _isoDate: isoDate
   };
 })();

@@ -1,8 +1,10 @@
 # Publishes the results feed the app reads.
 #
-# 4D draws Wednesday, Saturday and Sunday at 6.30pm SGT (10:30 UTC), and the
-# results appear on Singapore Pools' site within the hour. First run is about
-# an hour after that, with a second as a safety net.
+# 4D draws Wed/Sat/Sun and TOTO Mon/Thu, both at 6.30pm SGT (10:30 UTC);
+# Singapore Sweep draws the first Wednesday of the month at 6pm. Results
+# appear on Singapore Pools' site within the hour. The union of those days is
+# everything except Tuesday and Friday, so the schedule covers all three and
+# a run with nothing new to fetch costs one request per game and exits.
 #
 # On the minutes, which are deliberate and not arbitrary: these were originally
 # '0 12' and '0 15', and every run landed roughly FOUR HOURS late — 15:55 and
@@ -21,12 +23,12 @@
 # A cold start wants `python tools/scrape.py --backfill 250` run once, locally,
 # with the result committed.
 
-name: Scrape 4D results
+name: Scrape lottery results
 
 on:
   schedule:
-    - cron: '37 11 * * 0,3,6'   # 19:37 SGT — about an hour after the draw
-    - cron: '43 14 * * 0,3,6'   # 22:43 SGT — safety net
+    - cron: '37 11 * * 0,1,3,4,6'   # 19:37 SGT — about an hour after the draw
+    - cron: '43 14 * * 0,1,3,4,6'   # 22:43 SGT — safety net
   workflow_dispatch:
 
 permissions:
@@ -52,15 +54,28 @@ jobs:
           python - <<'PY'
           import json
           d = json.load(open('data/history.json', encoding='utf-8'))
-          draws = d['fourd']
           # A parser that has silently stopped working writes a valid but empty
           # file. Fail the run rather than publishing one.
-          assert len(draws) > 100, 'too few draws: %d' % len(draws)
-          for x in draws[:5]:
-              assert x['first'] and len(x['first']) == 4, 'draw %s missing 1st prize' % x['draw']
-              assert len(x['starter']) == 10, 'draw %s has %d starters' % (x['draw'], len(x['starter']))
-              assert len(x['consolation']) == 10, 'draw %s has %d consolations' % (x['draw'], len(x['consolation']))
-          print('ok: %d draws, newest %s' % (len(draws), draws[0]['date']))
+          floors = {'fourd': 300, 'toto': 200, 'sweep': 30}
+          for key, floor in floors.items():
+              rows = d.get(key) or []
+              assert len(rows) >= floor, '%s: only %d draws, expected at least %d' % (key, len(rows), floor)
+          for x in d['fourd'][:3]:
+              assert x['first'] and len(x['first']) == 4, '4D draw %s missing 1st prize' % x['draw']
+              assert len(x['starter']) == 10 and len(x['consolation']) == 10, '4D draw %s truncated' % x['draw']
+          for x in d['toto'][:3]:
+              assert len(x['numbers']) == 6 and x['additional'], 'TOTO draw %s malformed' % x['draw']
+              assert len(x['groups']) == 7, 'TOTO draw %s has %d groups' % (x['draw'], len(x['groups']))
+          for x in d['sweep'][:2]:
+              assert len(x['first'] or '') == 7, 'Sweep draw %s missing 1st prize' % x['draw']
+              for g in x['groups']:
+                  if '2D' in g['label']:
+                      continue
+                  assert len(g['numbers']) == g['count'], (
+                      'Sweep draw %s, %s: heading says %d, found %d'
+                      % (x['draw'], g['label'], g['count'], len(g['numbers'])))
+          print('ok: %d 4D, %d TOTO, %d Sweep; newest 4D %s'
+                % (len(d['fourd']), len(d['toto']), len(d['sweep']), d['fourd'][0]['date']))
           PY
 
       - name: Commit if anything changed

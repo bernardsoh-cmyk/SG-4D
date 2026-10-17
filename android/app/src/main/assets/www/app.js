@@ -1,30 +1,35 @@
 /*
- * SG 4D — UI.
+ * SG Lottery — UI for 4D, TOTO and Singapore Sweep.
  *
- * Renders four things over SGData: the published results, a checker that runs a
- * bet against a window of past draws, digit statistics, and a saved-numbers
- * list that re-checks itself whenever new results arrive.
+ * Five tabs over SGData: published results, a checker, statistics, saved
+ * numbers, and the disclaimers. Each of the first three carries its own game
+ * selector, kept independent on purpose — looking at TOTO results while
+ * checking a 4D number is a normal thing to want.
  *
  * One rule runs through all of it: anything that might not be current is
- * labelled as such, and never presented as the latest draw.
+ * labelled as such, and no money figure is shown that the rules do not fix.
  */
 (function () {
   'use strict';
 
-  var $ = function (sel) { return document.querySelector(sel); };
-  var $$ = function (sel) { return Array.prototype.slice.call(document.querySelectorAll(sel)); };
+  var $ = function (s) { return document.querySelector(s); };
+  var $$ = function (s) { return Array.prototype.slice.call(document.querySelectorAll(s)); };
 
-  var SAVED_KEY = 'sg4d.saved.v1';
+  var SAVED_KEY = 'sg4d.saved.v2';          // v2: items carry a game
   var SEEN_KEY = 'sg4d.disclaimer.v1';
 
   var ui = {
+    game: 'fourd',
+    checkGame: 'fourd',
+    statsGame: 'fourd',
     statsWindow: 100,
     fourdType: 'ordinary',
     fourdSize: 'big',
-    selectedDraw: null
+    totoPicks: [],
+    selected: {}                             // per game, so switching keeps place
   };
 
-  /* ---------------- small helpers ---------------- */
+  /* ---------------- helpers ---------------- */
 
   function el(tag, cls, text) {
     var n = document.createElement(tag);
@@ -34,48 +39,56 @@
   }
 
   function money(v) {
-    return '$' + v.toLocaleString('en-SG', { maximumFractionDigits: 2 });
+    return '$' + Number(v).toLocaleString('en-SG', { maximumFractionDigits: 2 });
   }
 
-  var DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-  var MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-                     'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  var DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  var MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
   function prettyDate(iso) {
     var p = iso.split('-');
-    // Constructed as UTC so the label never shifts by a day on a device that is
-    // not in SGT — the date string is the authority here, not the local clock.
+    // Built as UTC so the label never shifts a day on a device outside SGT:
+    // the date string is the authority here, not the local clock.
     var d = new Date(Date.UTC(+p[0], +p[1] - 1, +p[2]));
-    return DAY_NAMES[d.getUTCDay()] + ', ' + (+p[2]) + ' ' + MONTH_NAMES[+p[1] - 1] + ' ' + p[0];
+    return DAYS[d.getUTCDay()] + ', ' + (+p[2]) + ' ' + MONTHS[+p[1] - 1] + ' ' + p[0];
   }
 
-  function windowed(list) {
-    return ui.statsWindow ? list.slice(0, ui.statsWindow) : list;
+  /** '2589838' -> '258 9838', the way it is printed on the ticket. */
+  function sweepPretty(t) {
+    t = String(t || '');
+    return t.length === 7 ? t.slice(0, 3) + ' ' + t.slice(3) : t;
   }
 
-  /* ---------------- header / status ---------------- */
+  function draws(game) { return SGData.draws(game); }
+
+  /* ---------------- header ---------------- */
 
   function renderStatus() {
     var s = SGData.state;
     var line = $('#status-line');
     line.classList.remove('stale', 'live');
 
-    if (s.stale) {
-      line.textContent = 'Showing last known result — a newer draw may be out';
+    var behind = SGData.games.filter(function (g) { return SGData.isStale(g); });
+    if (behind.length) {
+      line.textContent = behind.map(SGData.label).join(' and ') +
+        (behind.length > 1 ? ' results may be out' : ' result may be out');
       line.classList.add('stale');
     } else if (s.source === 'live' || s.source === 'feed') {
-      line.textContent = 'Results up to date';
+      line.textContent = 'All results up to date';
       line.classList.add('live');
     } else {
-      line.textContent = SGData.draws.length + ' draws stored';
+      line.textContent = SGData.games.map(function (g) {
+        return draws(g).length + ' ' + SGData.label(g);
+      }).join(' · ');
     }
 
     var feed = $('#about-feed');
     if (feed) {
-      var bits = [SGData.draws.length + ' draws stored.'];
-      bits.push(SGData.feedConfigured
-        ? 'Update feed configured.'
-        : 'No update feed configured yet — running on the bundled history.');
+      var bits = [SGData.games.map(function (g) {
+        return draws(g).length + ' ' + SGData.label(g);
+      }).join(', ') + ' draws stored.'];
+      bits.push(SGData.feedConfigured ? 'Update feed configured.' : 'No update feed configured.');
       if (SGData.hasNative) bits.push('Live lookup available.');
       if (s.error) bits.push('Last update problem: ' + s.error);
       feed.textContent = bits.join(' ');
@@ -83,109 +96,180 @@
   }
 
   function renderNextDraw() {
-    var next = SGData.nextDraw();
+    var next = SGData.nextDraw(ui.game);
     var box = $('#next-draw');
-    if (!next) { box.textContent = ''; return; }
     box.innerHTML = '';
-    box.appendChild(document.createTextNode('Next draw '));
-    box.appendChild(el('b', null, DAY_NAMES[next.getDay()] + ' ' + next.getDate() + ' ' +
-                                 MONTH_NAMES[next.getMonth()] + ', 6.30pm'));
+    if (!next) return;
+    box.appendChild(document.createTextNode('Next ' + SGData.label(ui.game) + ' draw '));
+    var when = DAYS[next.getDay()] + ' ' + next.getDate() + ' ' + MONTHS[next.getMonth()] +
+               ', ' + (next.getHours() % 12 || 12) + '.' + (next.getMinutes() < 10 ? '0' : '') +
+               next.getMinutes() + 'pm';
+    box.appendChild(el('b', null, when));
   }
 
   /* ---------------- results ---------------- */
 
+  function selectedDraw(game) {
+    var list = draws(game);
+    var want = ui.selected[game];
+    for (var i = 0; i < list.length; i++) if (list[i].draw === want) return list[i];
+    return list[0] || null;
+  }
+
   function renderDrawPicker() {
     var sel = $('#draw-select');
+    var list = draws(ui.game);
     sel.innerHTML = '';
-    SGData.draws.forEach(function (d) {
+    list.forEach(function (d) {
       var o = el('option', null, prettyDate(d.date) + '  ·  Draw ' + d.draw);
       o.value = String(d.draw);
       sel.appendChild(o);
     });
-    if (ui.selectedDraw && SGData.draws.some(function (d) { return d.draw === ui.selectedDraw; })) {
-      sel.value = String(ui.selectedDraw);
-    } else if (SGData.draws.length) {
-      ui.selectedDraw = SGData.draws[0].draw;
-      sel.value = String(ui.selectedDraw);
-    }
+    var cur = selectedDraw(ui.game);
+    if (cur) { ui.selected[ui.game] = cur.draw; sel.value = String(cur.draw); }
   }
 
-  function currentDraw() {
-    for (var i = 0; i < SGData.draws.length; i++) {
-      if (SGData.draws[i].draw === ui.selectedDraw) return SGData.draws[i];
-    }
-    return SGData.draws[0] || null;
-  }
-
-  function numberBlock(label, numbers) {
+  function numberBlock(label, numbers, cls) {
     var wrap = el('div', 'numblock');
     wrap.appendChild(el('div', 'label', label));
-    var grid = el('div', 'numgrid');
+    var grid = el('div', cls || 'numgrid');
     numbers.forEach(function (n) { grid.appendChild(el('span', null, n)); });
     wrap.appendChild(grid);
     return wrap;
   }
 
+  function resultHead(card, d) {
+    var head = el('div', 'result-head');
+    head.appendChild(el('div', 'result-date', prettyDate(d.date)));
+    head.appendChild(el('div', 'result-draw', 'Draw ' + d.draw));
+    card.appendChild(head);
+  }
+
+  function renderFourD(d, card) {
+    var top = el('div', 'top3');
+    [['1st Prize', d.first, ''], ['2nd Prize', d.second, 'second'], ['3rd Prize', d.third, 'third']]
+      .forEach(function (p) {
+        var box = el('div', 'prize ' + p[2]);
+        box.appendChild(el('div', 'label', p[0]));
+        box.appendChild(el('div', 'num', p[1] || '—'));
+        top.appendChild(box);
+      });
+    card.appendChild(top);
+    if ((d.starter || []).length) card.appendChild(numberBlock('Starter Prizes', d.starter));
+    if ((d.consolation || []).length) card.appendChild(numberBlock('Consolation Prizes', d.consolation));
+  }
+
+  function renderToto(d, card) {
+    var wrap = el('div', 'numblock');
+    wrap.appendChild(el('div', 'label', 'Winning Numbers'));
+    var balls = el('div', 'balls');
+    d.numbers.forEach(function (n) { balls.appendChild(el('div', 'ball', String(n))); });
+    balls.appendChild(el('div', 'ball-plus', '+'));
+    balls.appendChild(el('div', 'ball add', String(d.additional)));
+    wrap.appendChild(balls);
+    card.appendChild(wrap);
+
+    if (d.jackpot) {
+      var jp = el('div', 'muted-sm jackpot-note',
+        'Group 1 prize for this draw: ' + money(d.jackpot));
+      card.appendChild(jp);
+    }
+
+    if ((d.groups || []).length) {
+      var table = el('table', 'grouptable');
+      var hr = el('tr');
+      ['Prize Group', 'Share', 'Winners'].forEach(function (h, i) {
+        hr.appendChild(el('th', i ? 'right' : null, h));
+      });
+      table.appendChild(hr);
+      d.groups.forEach(function (g) {
+        var tr = el('tr');
+        var won = g.shares > 0;
+        tr.appendChild(el('td', null, 'Group ' + g.group));
+        tr.appendChild(el('td', 'right' + (won ? '' : ' nowin'),
+          g.prize === null || g.prize === undefined ? '—' : money(g.prize)));
+        tr.appendChild(el('td', 'right' + (won ? '' : ' nowin'),
+          won ? g.shares.toLocaleString('en-SG') : '—'));
+        table.appendChild(tr);
+      });
+      card.appendChild(table);
+    }
+  }
+
+  function renderSweep(d, card) {
+    var top = el('div', 'top3');
+    [['1st Prize', d.first, ''], ['2nd Prize', d.second, 'second'], ['3rd Prize', d.third, 'third']]
+      .forEach(function (p) {
+        var box = el('div', 'prize ' + p[2]);
+        box.appendChild(el('div', 'label', p[0]));
+        box.appendChild(el('div', 'num sweep', sweepPretty(p[1]) || '—'));
+        top.appendChild(box);
+      });
+    card.appendChild(top);
+
+    (d.groups || []).forEach(function (g) {
+      var isTwoD = g.label.indexOf('2D') !== -1;
+      var heading = g.label + ' · ' + money(g.amount) + ' each';
+      var nums = isTwoD ? g.numbers : g.numbers.map(sweepPretty);
+      card.appendChild(numberBlock(heading, nums, isTwoD ? 'numgrid twod' : 'numgrid sweepgrid'));
+    });
+  }
+
+  var RENDER = { fourd: renderFourD, toto: renderToto, sweep: renderSweep };
+
   function renderResults() {
     renderNextDraw();
     var host = $('#result-card');
     host.innerHTML = '';
-    var d = currentDraw();
+    var d = selectedDraw(ui.game);
 
     if (!d) {
-      host.appendChild(el('p', 'empty', 'No results stored yet.'));
+      host.appendChild(el('p', 'empty', 'No ' + SGData.label(ui.game) + ' results stored yet.'));
     } else {
       var card = el('div', 'result');
-      var head = el('div', 'result-head');
-      head.appendChild(el('div', 'result-date', prettyDate(d.date)));
-      head.appendChild(el('div', 'result-draw', 'Draw ' + d.draw));
-      card.appendChild(head);
-
-      var top = el('div', 'top3');
-      [['1st Prize', d.first, ''], ['2nd Prize', d.second, 'second'], ['3rd Prize', d.third, 'third']]
-        .forEach(function (p) {
-          var box = el('div', 'prize ' + p[2]);
-          box.appendChild(el('div', 'label', p[0]));
-          box.appendChild(el('div', 'num', p[1] || '—'));
-          top.appendChild(box);
-        });
-      card.appendChild(top);
-
-      if ((d.starter || []).length) card.appendChild(numberBlock('Starter Prizes', d.starter));
-      if ((d.consolation || []).length) card.appendChild(numberBlock('Consolation Prizes', d.consolation));
+      resultHead(card, d);
+      RENDER[ui.game](d, card);
       host.appendChild(card);
     }
 
     renderRecent();
-
-    var oldest = SGData.draws.slice(-1)[0];
+    var oldest = draws(ui.game).slice(-1)[0];
     $('#source-note').textContent = oldest
-      ? 'Results published by Singapore Pools. History held in this app goes back to ' +
-        prettyDate(oldest.date) + '. Official results are whatever Singapore Pools publishes.'
+      ? 'Results published by Singapore Pools. ' + SGData.label(ui.game) +
+        ' history in this app goes back to ' + prettyDate(oldest.date) +
+        '. Official results are whatever Singapore Pools publishes.'
       : '';
+  }
+
+  function recentSummary(game, d) {
+    if (game === 'fourd') return d.first;
+    if (game === 'toto') return d.numbers.join('  ') + '  +' + d.additional;
+    return sweepPretty(d.first);
   }
 
   function renderRecent() {
     var host = $('#recent-list');
     host.innerHTML = '';
-    SGData.draws.slice(0, 20).forEach(function (d) {
+    draws(ui.game).slice(0, 20).forEach(function (d) {
       var row = el('div', 'recent');
       row.appendChild(el('div', 'when', prettyDate(d.date)));
-      row.appendChild(el('div', 'what', d.first));
+      var what = el('div', 'what' + (ui.game === 'toto' ? ' small-balls' : ''));
+      what.textContent = recentSummary(ui.game, d);
+      row.appendChild(what);
       row.addEventListener('click', function () {
-        ui.selectedDraw = d.draw;
+        ui.selected[ui.game] = d.draw;
         $('#draw-select').value = String(d.draw);
         renderResults();
         $('#views').scrollTop = 0;
       });
       host.appendChild(row);
     });
-    $('#recent-sub').textContent = SGData.draws.length + ' stored';
+    $('#recent-sub').textContent = draws(ui.game).length + ' stored';
   }
 
-  /* ---------------- check ---------------- */
+  /* ---------------- check: 4D ---------------- */
 
-  function describeFourDEntry() {
+  function describeFourD() {
     var raw = $('#fourd-entry').value.trim().toUpperCase();
     var note = $('#fourd-entry-note');
     var stake = parseFloat($('#fourd-stake').value);
@@ -195,15 +279,15 @@
     if (ui.fourdType === 'roll') {
       var nums = SGCheck.rollNumbers(raw);
       if (!nums) { note.textContent = 'A 4D Roll needs one rolling digit, e.g. 58R2.'; return; }
-      note.textContent = 'Covers 10 numbers (' + nums[0] + '–' + nums[9] + '). ' +
-        'Costs ' + money(10 * stake) + ' at ' + money(stake) + ' each.';
+      note.textContent = 'Covers 10 numbers (' + nums[0] + '–' + nums[9] + '). Costs ' +
+        money(10 * stake) + ' at ' + money(stake) + ' each.';
       return;
     }
     if (!/^\d{4}$/.test(raw)) { note.textContent = 'Enter a 4-digit number from 0000 to 9999.'; return; }
 
     var pattern = SGCheck.digitPattern(raw);
     var perms = SGCheck.permutationCount(raw);
-    var patternLabel = {
+    var label = {
       allDifferent: 'four different digits', onePair: 'one repeated digit',
       twoPairs: 'two pairs', threeSame: 'three of a kind', allSame: 'four identical digits'
     }[pattern];
@@ -213,19 +297,35 @@
         note.textContent = 'A number with four identical digits has only one permutation, so it cannot be a System Entry.';
         return;
       }
-      note.textContent = 'Covers all ' + perms + ' permutations (' + patternLabel + '). ' +
-        'Costs ' + money(perms * stake) + ' at ' + money(stake) + ' each, and each one pays the full fixed prize.';
+      note.textContent = 'Covers all ' + perms + ' permutations (' + label + '). Costs ' +
+        money(perms * stake) + ' at ' + money(stake) + ' each, and each pays the full fixed prize.';
     } else if (ui.fourdType === 'ibet') {
       if (pattern === 'allSame') {
         note.textContent = 'A number with four identical digits has only one permutation, so it cannot be an iBet.';
         return;
       }
-      note.textContent = 'Covers all ' + perms + ' permutations (' + patternLabel + ') for one ' +
+      note.textContent = 'Covers all ' + perms + ' permutations (' + label + ') for one ' +
         money(stake) + ' stake. Prizes are correspondingly smaller — that is the trade.';
     } else {
-      note.textContent = 'One number, exact order. ' + patternLabel.charAt(0).toUpperCase() +
-        patternLabel.slice(1) + '.';
+      note.textContent = 'One number, exact order. ' + label.charAt(0).toUpperCase() + label.slice(1) + '.';
     }
+  }
+
+  function summaryCard(out, won, headline, sub) {
+    var box = el('div', 'win-summary' + (won ? ' won' : ''));
+    box.appendChild(el('div', 'headline', headline));
+    if (sub) box.appendChild(el('div', 'sub', sub));
+    out.appendChild(box);
+  }
+
+  function hitRow(out, dateLabel, amountText, amountCls, detail) {
+    var row = el('div', 'hitrow');
+    var top = el('div', 'top');
+    top.appendChild(el('div', 'date', dateLabel));
+    top.appendChild(el('div', 'amt' + (amountCls ? ' ' + amountCls : ''), amountText));
+    row.appendChild(top);
+    if (detail) row.appendChild(el('div', 'detail', detail));
+    out.appendChild(row);
   }
 
   function runFourDCheck() {
@@ -235,62 +335,191 @@
     out.innerHTML = '';
     if (!raw) return;
 
-    var draws = SGData.draws.slice(0, 30);
-    var hits = [];
-    var total = 0;
-    var error = null;
-
-    draws.forEach(function (d) {
+    var list = draws('fourd').slice(0, 30);
+    var hits = [], total = 0, error = null;
+    list.forEach(function (d) {
       var r = SGCheck.checkFourD(raw, ui.fourdType, ui.fourdSize, stake, d);
       if (r.error) { error = r.error; return; }
       if (r.total > 0) { hits.push({ draw: d, result: r }); total += r.total; }
     });
 
-    if (error) {
-      var bad = el('div', 'win-summary');
-      bad.appendChild(el('div', 'headline', 'Check that entry'));
-      bad.appendChild(el('div', 'sub', error));
-      out.appendChild(bad);
+    if (error) { summaryCard(out, false, 'Check that entry', error); return; }
+
+    summaryCard(out, hits.length,
+      hits.length ? money(total) + ' across ' + hits.length + (hits.length === 1 ? ' draw' : ' draws')
+                  : 'No wins in the last ' + list.length + ' draws',
+      raw + ' · ' + ui.fourdType + ' · ' + ui.fourdSize + ' · ' + money(stake) +
+      ' per number, checked against the last ' + list.length + ' draws held in this app.');
+
+    hits.forEach(function (h) {
+      hitRow(out, prettyDate(h.draw.date) + ' · Draw ' + h.draw.draw, money(h.result.total), '',
+        h.result.lines.map(function (l) {
+          return l.category + (l.count > 1 ? ' ×' + l.count : '') + ' — ' + money(l.amount);
+        }).join(' · '));
+    });
+  }
+
+  /* ---------------- check: TOTO ---------------- */
+
+  function buildTotoGrid() {
+    var grid = $('#toto-grid');
+    grid.innerHTML = '';
+    for (var n = 1; n <= 49; n++) {
+      (function (n) {
+        var b = el('button', null, String(n));
+        b.addEventListener('click', function () {
+          var at = ui.totoPicks.indexOf(n);
+          if (at !== -1) ui.totoPicks.splice(at, 1);
+          else if (ui.totoPicks.length < 12) ui.totoPicks.push(n);
+          renderTotoPicks();
+        });
+        grid.appendChild(b);
+      })(n);
+    }
+  }
+
+  function renderTotoPicks() {
+    $$('#toto-grid button').forEach(function (b) {
+      b.classList.toggle('picked', ui.totoPicks.indexOf(parseInt(b.textContent, 10)) !== -1);
+    });
+    var count = ui.totoPicks.length;
+    $('#toto-pick-count').textContent = count + ' of 6' + (count > 6 ? ' (System ' + count + ')' : '');
+    var note = $('#toto-entry-note');
+    if (count < 6) note.textContent = 'Pick ' + (6 - count) + ' more.';
+    else if (count === 6) note.textContent = 'Ordinary Entry — one set of six.';
+    else {
+      note.textContent = 'System ' + count + ' — ' +
+        SGCheck.combinations(ui.totoPicks, 6).length +
+        ' separate sets of six, each checked on its own.';
+    }
+  }
+
+  function runTotoCheck() {
+    var out = $('#toto-check-out');
+    out.innerHTML = '';
+    if (ui.totoPicks.length < 6) return;
+
+    var list = draws('toto').slice(0, 30);
+    var hits = [], exact = 0, anyUnknown = false;
+    list.forEach(function (d) {
+      var r = SGCheck.checkToto(ui.totoPicks, d);
+      if (r.error || !r.lines.length) return;
+      hits.push({ draw: d, result: r });
+      exact += r.total;
+      if (r.totalIsPartial) anyUnknown = true;
+    });
+
+    if (!hits.length) {
+      summaryCard(out, false, 'No prizes in the last ' + list.length + ' draws',
+        'A TOTO prize needs at least three of the six winning numbers.');
       return;
     }
 
-    var summary = el('div', 'win-summary' + (hits.length ? ' won' : ''));
-    summary.appendChild(el('div', 'headline',
-      hits.length ? money(total) + ' across ' + hits.length + (hits.length === 1 ? ' draw' : ' draws')
-                  : 'No wins in the last ' + draws.length + ' draws'));
-    summary.appendChild(el('div', 'sub',
-      raw + ' · ' + ui.fourdType + ' · ' + ui.fourdSize + ' · ' + money(stake) + ' per number, ' +
-      'checked against the last ' + draws.length + ' draws held in this app.'));
-    out.appendChild(summary);
+    // Lead with the prize, not the arithmetic. When every prize won is a pool
+    // share the exact total is legitimately $0, and "$0" is the wrong thing to
+    // tell someone who just matched all six.
+    var best = 8;
+    hits.forEach(function (h) {
+      h.result.lines.forEach(function (l) { if (l.group < best) best = l.group; });
+    });
+    var word = hits.length === 1 ? ' draw' : ' draws';
+    var headline;
+    if (exact > 0 && !anyUnknown) headline = money(exact) + ' across ' + hits.length + word;
+    else if (exact > 0) headline = money(exact) + ' plus pool shares, across ' + hits.length + word;
+    else headline = (SGCheck.TOTO_GROUP_LABEL[best] || ('Group ' + best)) + ' — a share of the prize pool';
+
+    summaryCard(out, true, headline,
+      ui.totoPicks.join(', ') + ' — checked against the last ' + list.length + ' draws. ' +
+      (anyUnknown ? 'Groups 1 to 4 are a share of that draw’s pool, so where the published share is not stored the amount is left open rather than estimated.' : ''));
 
     hits.forEach(function (h) {
-      var row = el('div', 'hitrow');
-      var top = el('div', 'top');
-      top.appendChild(el('div', 'date', prettyDate(h.draw.date) + ' · Draw ' + h.draw.draw));
-      top.appendChild(el('div', 'amt', money(h.result.total)));
-      row.appendChild(top);
-      row.appendChild(el('div', 'detail', h.result.lines.map(function (l) {
-        return l.category + (l.count > 1 ? ' ×' + l.count : '') + ' — ' + money(l.amount);
-      }).join(' · ')));
-      out.appendChild(row);
+      var known = h.result.total > 0;
+      hitRow(out, prettyDate(h.draw.date) + ' · Draw ' + h.draw.draw,
+        known ? money(h.result.total) : 'pool share', known ? '' : 'unknown',
+        h.result.lines.map(function (l) {
+          return l.label + ' (' + l.rule + ')' + (l.shares > 1 ? ' ×' + l.shares : '') +
+                 ' — ' + (l.amount !== null ? money(l.amount) : l.note);
+        }).join(' · '));
+    });
+  }
+
+  /* ---------------- check: Sweep ---------------- */
+
+  function describeSweep() {
+    var t = SGCheck.sweepTicket($('#sweep-entry').value);
+    var note = $('#sweep-entry-note');
+    if (!t) { note.textContent = ''; return; }
+    note.textContent = t.length === 7
+      ? 'Ticket ' + sweepPretty(t) + '. Checked against every stored draw, including the last two digits for 2D Delight.'
+      : 'A Singapore Sweep ticket number has 7 digits — you have ' + t.length + '.';
+  }
+
+  function runSweepCheck() {
+    var out = $('#sweep-check-out');
+    out.innerHTML = '';
+    var raw = $('#sweep-entry').value.trim();
+    if (!raw) return;
+
+    var list = draws('sweep');
+    var hits = [], total = 0, error = null, anyUnknown = false;
+    list.forEach(function (d) {
+      var r = SGCheck.checkSweep(raw, d);
+      if (r.error) { error = r.error; return; }
+      if (!r.lines.length) return;
+      hits.push({ draw: d, result: r });
+      total += r.total;
+      if (r.lines.some(function (l) { return l.amount === null; })) anyUnknown = true;
+    });
+
+    if (error) { summaryCard(out, false, 'Check that ticket', error); return; }
+
+    summaryCard(out, hits.length,
+      hits.length
+        ? (total > 0 ? money(total) : 'A top prize') +
+          (anyUnknown && total > 0 ? ' plus a top prize' : '') +
+          ' across ' + hits.length + (hits.length === 1 ? ' draw' : ' draws')
+        : 'No prizes in ' + list.length + ' stored draws',
+      sweepPretty(SGCheck.sweepTicket(raw)) + ' — checked against every Singapore Sweep draw in this app.');
+
+    hits.forEach(function (h) {
+      var known = h.result.total > 0;
+      hitRow(out, prettyDate(h.draw.date) + ' · Draw ' + h.draw.draw,
+        known ? money(h.result.total) : 'see Pools', known ? '' : 'unknown',
+        h.result.lines.map(function (l) {
+          return l.label + (l.amount !== null ? ' — ' + money(l.amount) : ' — ' + l.note);
+        }).join(' · '));
     });
   }
 
   /* ---------------- stats ---------------- */
 
-  function renderStats() {
-    var host = $('#stats-body');
-    host.innerHTML = '';
+  function windowed(list) { return ui.statsWindow ? list.slice(0, ui.statsWindow) : list; }
 
-    var draws = windowed(SGData.draws);
-    if (!draws.length) { host.appendChild(el('p', 'empty', 'No draws stored.')); return; }
+  function bars(host, rows, maxValue, labelFn, valueFn) {
+    var wrap = el('div', 'bars');
+    rows.forEach(function (r) {
+      var bar = el('div', 'bar');
+      bar.appendChild(el('div', null, labelFn(r)));
+      var track = el('div', 'track');
+      var fill = el('div', 'fill');
+      fill.style.width = Math.round(100 * valueFn(r) / Math.max(maxValue, 1)) + '%';
+      track.appendChild(fill);
+      bar.appendChild(track);
+      bar.appendChild(el('div', 'v', String(valueFn(r))));
+      wrap.appendChild(bar);
+    });
+    host.appendChild(wrap);
+  }
 
-    var freq = SGStats.digitFrequency(draws, 'all');
+  function statsFourD(host) {
+    var list = windowed(draws('fourd'));
+    if (!list.length) { host.appendChild(el('p', 'empty', 'No draws stored.')); return; }
 
+    var freq = SGStats.digitFrequency(list, 'all');
     host.appendChild(el('h3', null, 'Digit frequency by position'));
     host.appendChild(el('p', 'muted-sm',
       'Across all 23 numbers drawn each time (3 prizes, 10 starters, 10 consolations) over ' +
-      draws.length + ' draws. Expected per cell: ' + freq.expectedPerPosition.toFixed(0) + '.'));
+      list.length + ' draws. Expected per cell: ' + freq.expectedPerPosition.toFixed(0) + '.'));
 
     ['1st digit', '2nd digit', '3rd digit', '4th digit'].forEach(function (label, p) {
       var block = el('div');
@@ -303,8 +532,6 @@
         var cell = el('div', 'poscell');
         cell.appendChild(el('div', 'd', String(d)));
         cell.appendChild(el('div', 'v', String(counts[d])));
-        // A class, not an inline background: the gold tint also needs a darker
-        // label on top of it to stay readable, and that belongs in the stylesheet.
         if (counts[d] === max) cell.classList.add('top');
         grid.appendChild(cell);
       }
@@ -312,41 +539,81 @@
       host.appendChild(block);
     });
 
-    var tally = SGStats.numberTally(draws, 'all');
-    var top = tally.slice().sort(function (a, b) {
-      return b.count - a.count || a.lastIndex - b.lastIndex;
-    }).slice(0, 21);
-
+    var tally = SGStats.numberTally(list, 'all');
     host.appendChild(el('h3', null, 'Most frequent numbers'));
     host.appendChild(el('p', 'muted-sm',
       'Out of 10,000 possible numbers, ' + tally.length + ' have appeared at least once in this window.'));
     var grid = el('div', 'statgrid');
-    top.forEach(function (t) {
-      var cell = el('div', 'statcell hot');
-      cell.appendChild(el('div', 'n', t.number));
-      cell.appendChild(el('div', 'c', t.count + '×'));
+    tally.slice().sort(function (a, b) { return b.count - a.count || a.lastIndex - b.lastIndex; })
+      .slice(0, 21).forEach(function (t) {
+        var cell = el('div', 'statcell hot');
+        cell.appendChild(el('div', 'n', t.number));
+        cell.appendChild(el('div', 'c', t.count + '×'));
+        grid.appendChild(cell);
+      });
+    host.appendChild(grid);
+  }
+
+  function statsToto(host) {
+    var list = windowed(draws('toto'));
+    if (!list.length) { host.appendChild(el('p', 'empty', 'No draws stored.')); return; }
+
+    var freq = SGStats.ballFrequency(list, false);
+    host.appendChild(el('h3', null, 'Ball frequency'));
+    host.appendChild(el('p', 'muted-sm',
+      'Over ' + list.length + ' draws each ball should appear about ' + freq.expected.toFixed(1) +
+      ' times. The highlighted ten are the most drawn — note how close they are to expected.'));
+
+    var sorted = freq.balls.slice().sort(function (a, b) { return b.count - a.count; });
+    var hot = {};
+    sorted.slice(0, 10).forEach(function (b) { hot[b.number] = true; });
+
+    var grid = el('div', 'statgrid');
+    freq.balls.forEach(function (b) {
+      var cell = el('div', 'statcell' + (hot[b.number] ? ' hot' : ''));
+      cell.appendChild(el('div', 'n', String(b.number)));
+      cell.appendChild(el('div', 'c', b.count + '×'));
       grid.appendChild(cell);
     });
     host.appendChild(grid);
 
-    host.appendChild(el('h3', null, 'Top prizes only'));
-    var topTally = SGStats.numberTally(draws, 'top')
-      .sort(function (a, b) { return b.count - a.count; })
-      .filter(function (t) { return t.count > 1; })
-      .slice(0, 14);
-    if (!topTally.length) {
-      host.appendChild(el('p', 'muted-sm',
-        'No number has taken a 1st, 2nd or 3rd prize more than once in this window.'));
-    } else {
-      var g2 = el('div', 'statgrid');
-      topTally.forEach(function (t) {
-        var cell = el('div', 'statcell hot');
-        cell.appendChild(el('div', 'n', t.number));
-        cell.appendChild(el('div', 'c', t.count + '×'));
-        g2.appendChild(cell);
-      });
-      host.appendChild(g2);
-    }
+    host.appendChild(el('h3', null, 'Longest without appearing'));
+    var stale = freq.balls.filter(function (b) { return b.drawsSince !== null; })
+      .sort(function (a, b) { return b.drawsSince - a.drawsSince; }).slice(0, 8);
+    bars(host, stale, stale.length ? stale[0].drawsSince : 1,
+      function (b) { return 'No. ' + b.number; }, function (b) { return b.drawsSince; });
+
+    var shape = SGStats.shapeStats(list);
+    host.appendChild(el('h3', null, 'Shape of the winning sets'));
+    host.appendChild(el('p', 'muted-sm',
+      'Sum of the six numbers ranged ' + shape.sumMin + ' to ' + shape.sumMax +
+      ', median ' + shape.sumMedian + '.'));
+    var oddRows = [];
+    shape.oddSplit.forEach(function (c, odd) { if (c) oddRows.push({ odd: odd, count: c }); });
+    bars(host, oddRows, Math.max.apply(null, shape.oddSplit),
+      function (r) { return r.odd + ' odd'; }, function (r) { return r.count; });
+
+    host.appendChild(el('h3', null, 'How often each group was won'));
+    var table = el('table', 'grouptable');
+    var hr = el('tr');
+    ['Group', 'Draws won', 'Biggest share'].forEach(function (h, i) {
+      hr.appendChild(el('th', i ? 'right' : null, h));
+    });
+    table.appendChild(hr);
+    SGStats.groupHistory(list).forEach(function (g) {
+      var tr = el('tr');
+      tr.appendChild(el('td', null, 'Group ' + g.group + ' (' + SGCheck.TOTO_GROUP_RULE[g.group] + ')'));
+      tr.appendChild(el('td', 'right', g.drawsWon + ' of ' + list.length));
+      tr.appendChild(el('td', 'right', g.biggestShare === null ? '—' : money(g.biggestShare)));
+      table.appendChild(tr);
+    });
+    host.appendChild(table);
+  }
+
+  function renderStats() {
+    var host = $('#stats-body');
+    host.innerHTML = '';
+    if (ui.statsGame === 'toto') statsToto(host); else statsFourD(host);
   }
 
   /* ---------------- saved ---------------- */
@@ -355,55 +622,83 @@
     try { return JSON.parse(localStorage.getItem(SAVED_KEY)) || []; }
     catch (e) { return []; }
   }
-
   function writeSaved(list) {
     try { localStorage.setItem(SAVED_KEY, JSON.stringify(list)); } catch (e) { /* ignore */ }
+  }
+
+  function savedStatus(item) {
+    if (item.game === 'fourd') {
+      var list = draws('fourd').slice(0, 60);
+      var wins = 0, total = 0, latest = null;
+      list.forEach(function (d) {
+        var r = SGCheck.checkFourD(item.number, 'ordinary', 'big', 1, d);
+        if (!r.error && r.total > 0) { wins++; total += r.total; if (!latest) latest = { d: d, r: r }; }
+      });
+      return wins
+        ? { hit: true, text: wins + (wins === 1 ? ' win' : ' wins') + ' in the last ' + list.length +
+            ' draws — ' + money(total) + ' at $1 Big, most recently ' + prettyDate(latest.d.date) +
+            ' (' + latest.r.lines[0].category + ').' }
+        : { hit: false, text: 'No win in the last ' + list.length + ' draws.' };
+    }
+    if (item.game === 'toto') {
+      var tl = draws('toto').slice(0, 60), count = 0, best = null;
+      tl.forEach(function (d) {
+        var r = SGCheck.checkToto(item.picks, d);
+        if (r.error || !r.lines.length) return;
+        count++;
+        if (!best || r.lines[0].group < best.line.group) best = { line: r.lines[0], draw: d };
+      });
+      return count
+        ? { hit: true, text: count + (count === 1 ? ' prize' : ' prizes') + ' in the last ' + tl.length +
+            ' draws — best was ' + best.line.label + ' on ' + prettyDate(best.draw.date) + '.' }
+        : { hit: false, text: 'No prize in the last ' + tl.length + ' draws.' };
+    }
+    var sl = draws('sweep'), sCount = 0, sTotal = 0, sLatest = null;
+    sl.forEach(function (d) {
+      var r = SGCheck.checkSweep(item.ticket, d);
+      if (r.error || !r.lines.length) return;
+      sCount++; sTotal += r.total;
+      if (!sLatest) sLatest = { d: d, r: r };
+    });
+    return sCount
+      ? { hit: true, text: sCount + (sCount === 1 ? ' prize' : ' prizes') + ' in ' + sl.length +
+          ' stored draws — ' + (sTotal > 0 ? money(sTotal) : 'a top prize') + ', most recently ' +
+          prettyDate(sLatest.d.date) + '.' }
+      : { hit: false, text: 'No prize in ' + sl.length + ' stored draws.' };
+  }
+
+  function savedLabel(item) {
+    if (item.game === 'fourd') return item.number;
+    if (item.game === 'toto') return item.picks.join('  ');
+    return sweepPretty(item.ticket);
   }
 
   function renderSaved() {
     var host = $('#saved-list');
     host.innerHTML = '';
     var list = readSaved();
-    if (!list.length) {
-      host.appendChild(el('p', 'empty', 'Nothing saved yet.'));
-      return;
-    }
+    if (!list.length) { host.appendChild(el('p', 'empty', 'Nothing saved yet.')); return; }
 
     list.forEach(function (item, index) {
       var card = el('div', 'saved');
       var top = el('div', 'top');
-      top.appendChild(el('div', 'nums', item.number));
+      var nums = el('div', 'nums' + (item.game === 'fourd' ? '' : ' set'), savedLabel(item));
+      top.appendChild(nums);
+      var tag = el('span', 'gametag', SGData.label(item.game));
+      nums.appendChild(tag);
       var del = el('button', 'del', '✕');
+      del.setAttribute('aria-label', 'Remove ' + savedLabel(item));
       del.addEventListener('click', function () {
-        var current = readSaved();
-        current.splice(index, 1);
-        writeSaved(current);
+        var cur = readSaved();
+        cur.splice(index, 1);
+        writeSaved(cur);
         renderSaved();
       });
       top.appendChild(del);
       card.appendChild(top);
 
-      // Checked at $1 Ordinary/Big, which is the plain reading of a saved
-      // number. The Check tab is where entry types live.
-      var draws = SGData.draws.slice(0, 60);
-      var wins = 0, total = 0, latest = null;
-      draws.forEach(function (d) {
-        var r = SGCheck.checkFourD(item.number, 'ordinary', 'big', 1, d);
-        if (!r.error && r.total > 0) {
-          wins++; total += r.total;
-          if (!latest) latest = { d: d, r: r };
-        }
-      });
-
-      var status = el('div', 'status');
-      if (wins) {
-        status.className = 'status hit';
-        status.textContent = wins + (wins === 1 ? ' win' : ' wins') + ' in the last ' +
-          draws.length + ' draws — ' + money(total) + ' at $1 Big, most recently ' +
-          prettyDate(latest.d.date) + ' (' + latest.r.lines[0].category + ').';
-      } else {
-        status.textContent = 'No win in the last ' + draws.length + ' draws.';
-      }
+      var s = savedStatus(item);
+      var status = el('div', 'status' + (s.hit ? ' hit' : ''), s.text);
       card.appendChild(status);
       host.appendChild(card);
     });
@@ -414,6 +709,12 @@
   function selectChip(row, attr, value) {
     $$(row + ' .chip[' + attr + ']').forEach(function (c) {
       c.classList.toggle('selected', c.getAttribute(attr) === value);
+    });
+  }
+
+  function showCheckPane() {
+    ['fourd', 'toto', 'sweep'].forEach(function (g) {
+      $('#pane-' + g).classList.toggle('hidden', ui.checkGame !== g);
     });
   }
 
@@ -430,9 +731,35 @@
       });
     });
 
+    $$('#results-game .chip').forEach(function (c) {
+      c.addEventListener('click', function () {
+        ui.game = c.getAttribute('data-game');
+        selectChip('#results-game', 'data-game', ui.game);
+        renderDrawPicker();
+        renderResults();
+        $('#views').scrollTop = 0;
+      });
+    });
+
     $('#draw-select').addEventListener('change', function (e) {
-      ui.selectedDraw = parseInt(e.target.value, 10);
+      ui.selected[ui.game] = parseInt(e.target.value, 10);
       renderResults();
+    });
+
+    $$('#check-game .chip').forEach(function (c) {
+      c.addEventListener('click', function () {
+        ui.checkGame = c.getAttribute('data-checkgame');
+        selectChip('#check-game', 'data-checkgame', ui.checkGame);
+        showCheckPane();
+      });
+    });
+
+    $$('#stats-game .chip').forEach(function (c) {
+      c.addEventListener('click', function () {
+        ui.statsGame = c.getAttribute('data-statsgame');
+        selectChip('#stats-game', 'data-statsgame', ui.statsGame);
+        renderStats();
+      });
     });
 
     $$('#fourd-type .chip').forEach(function (c) {
@@ -440,20 +767,33 @@
         ui.fourdType = c.getAttribute('data-type');
         selectChip('#fourd-type', 'data-type', ui.fourdType);
         $('#fourd-entry-hint').classList.toggle('hidden', ui.fourdType !== 'roll');
-        describeFourDEntry();
+        describeFourD();
       });
     });
     $$('#fourd-size .chip').forEach(function (c) {
       c.addEventListener('click', function () {
         ui.fourdSize = c.getAttribute('data-size');
         selectChip('#fourd-size', 'data-size', ui.fourdSize);
-        describeFourDEntry();
+        describeFourD();
       });
     });
-
-    $('#fourd-entry').addEventListener('input', describeFourDEntry);
-    $('#fourd-stake').addEventListener('change', describeFourDEntry);
+    $('#fourd-entry').addEventListener('input', describeFourD);
+    $('#fourd-stake').addEventListener('change', describeFourD);
     $('#fourd-check-btn').addEventListener('click', runFourDCheck);
+
+    $('#toto-clear').addEventListener('click', function () {
+      ui.totoPicks = [];
+      renderTotoPicks();
+      $('#toto-check-out').innerHTML = '';
+    });
+    $('#toto-quickpick').addEventListener('click', function () {
+      ui.totoPicks = SGStats.randomToto(6);
+      renderTotoPicks();
+    });
+    $('#toto-check-btn').addEventListener('click', runTotoCheck);
+
+    $('#sweep-entry').addEventListener('input', describeSweep);
+    $('#sweep-check-btn').addEventListener('click', runSweepCheck);
 
     $$('#stats-window .chip').forEach(function (c) {
       c.addEventListener('click', function () {
@@ -466,10 +806,26 @@
     $('#save-fourd-btn').addEventListener('click', function () {
       var v = $('#save-fourd').value.trim();
       if (!/^\d{4}$/.test(v)) return;
-      var list = readSaved();
-      list.push({ number: v });
-      writeSaved(list);
+      var list = readSaved(); list.push({ game: 'fourd', number: v }); writeSaved(list);
       $('#save-fourd').value = '';
+      renderSaved();
+    });
+    $('#save-toto-btn').addEventListener('click', function () {
+      var picks = ($('#save-toto').value.match(/\d+/g) || []).map(Number)
+        .filter(function (n) { return n >= 1 && n <= 49; });
+      var uniq = picks.filter(function (n, i) { return picks.indexOf(n) === i; });
+      if (uniq.length < 6) return;
+      var list = readSaved();
+      list.push({ game: 'toto', picks: uniq.slice(0, 12).sort(function (a, b) { return a - b; }) });
+      writeSaved(list);
+      $('#save-toto').value = '';
+      renderSaved();
+    });
+    $('#save-sweep-btn').addEventListener('click', function () {
+      var t = SGCheck.sweepTicket($('#save-sweep').value);
+      if (t.length !== 7) return;
+      var list = readSaved(); list.push({ game: 'sweep', ticket: t }); writeSaved(list);
+      $('#save-sweep').value = '';
       renderSaved();
     });
 
@@ -495,6 +851,9 @@
   /* ---------------- boot ---------------- */
 
   function boot() {
+    buildTotoGrid();
+    renderTotoPicks();
+    showCheckPane();
     wire();
 
     var seen = false;
@@ -503,15 +862,16 @@
 
     $('#build-note').textContent = 'Results by Singapore Pools · independent app';
 
-    // Inside the app, data.js watches for tonight's draw and calls this the
-    // moment it lands. Only move the user to the new draw if they are still
-    // sitting on the latest one — if they have gone back to look at an older
+    // Inside the app, data.js watches for a due draw and calls this the moment
+    // it lands. Only move the user onto the new draw if they are still sitting
+    // on the latest one for that game — if they have gone back to an older
     // draw, pulling the view out from under them would be worse than waiting.
     SGData.onLiveResult = function () {
-      var previousNewest = SGData.draws[1] && SGData.draws[1].draw;
-      var wasOnLatest = !ui.selectedDraw || ui.selectedDraw === previousNewest;
+      var list = draws(ui.game);
+      var previousNewest = list[1] && list[1].draw;
+      var wasOnLatest = !ui.selected[ui.game] || ui.selected[ui.game] === previousNewest;
       renderStatus();
-      if (wasOnLatest) ui.selectedDraw = SGData.draws[0].draw;
+      if (wasOnLatest && list[0]) ui.selected[ui.game] = list[0].draw;
       renderDrawPicker();
       renderResults();
     };
@@ -531,9 +891,6 @@
     }
   }
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', boot);
-  } else {
-    boot();
-  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
+  else boot();
 })();

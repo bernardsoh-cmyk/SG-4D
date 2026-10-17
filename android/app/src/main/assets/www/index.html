@@ -12,7 +12,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<title>SG 4D — Results &amp; Checker</title>
+<title>SG Lottery — 4D, TOTO &amp; Sweep Results</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/icon-192.png">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
@@ -26,7 +26,7 @@
     <div class="brand">
       <img class="brand-mark" src="icons/icon-192.png" alt="" width="36" height="36">
       <div>
-        <div class="brand-name">SG 4D</div>
+        <div class="brand-name">SG Lottery</div>
         <div id="status-line" class="status">Loading results…</div>
       </div>
     </div>
@@ -37,6 +37,12 @@
 
     <!-- ===================== RESULTS ===================== -->
     <section id="view-results" class="view active">
+      <div class="chip-row game-row" id="results-game" role="tablist">
+        <button class="chip selected" data-game="fourd">4D</button>
+        <button class="chip" data-game="toto">TOTO</button>
+        <button class="chip" data-game="sweep">Sweep</button>
+      </div>
+
       <div id="next-draw" class="nextdraw"></div>
 
       <div class="draw-picker">
@@ -57,49 +63,93 @@
 
     <!-- ===================== CHECK ===================== -->
     <section id="view-check" class="view">
-      <div class="field">
-        <label for="fourd-entry">Your number</label>
-        <input id="fourd-entry" class="input big-num" inputmode="numeric"
-               maxlength="4" placeholder="1234" autocomplete="off">
-        <p class="hint hidden" id="fourd-entry-hint">Use R for the rolling digit on a 4D Roll, e.g. 58R2.</p>
+      <div class="chip-row game-row" id="check-game">
+        <button class="chip selected" data-checkgame="fourd">4D</button>
+        <button class="chip" data-checkgame="toto">TOTO</button>
+        <button class="chip" data-checkgame="sweep">Sweep</button>
       </div>
 
-      <div class="field">
-        <label>Entry type</label>
-        <div class="chip-row" id="fourd-type">
-          <button class="chip selected" data-type="ordinary">Ordinary</button>
-          <button class="chip" data-type="ibet">iBet</button>
-          <button class="chip" data-type="system">System</button>
-          <button class="chip" data-type="roll">4D Roll</button>
+      <!-- ---------- 4D ---------- -->
+      <div id="pane-fourd" class="checkpane">
+        <div class="field">
+          <label for="fourd-entry">Your number</label>
+          <input id="fourd-entry" class="input big-num" inputmode="numeric"
+                 maxlength="4" placeholder="1234" autocomplete="off">
+          <p class="hint hidden" id="fourd-entry-hint">Use R for the rolling digit on a 4D Roll, e.g. 58R2.</p>
         </div>
-      </div>
 
-      <div class="field two-up">
-        <div>
-          <label>Big or Small</label>
-          <div class="chip-row" id="fourd-size">
-            <button class="chip selected" data-size="big">Big</button>
-            <button class="chip" data-size="small">Small</button>
+        <div class="field">
+          <label>Entry type</label>
+          <div class="chip-row" id="fourd-type">
+            <button class="chip selected" data-type="ordinary">Ordinary</button>
+            <button class="chip" data-type="ibet">iBet</button>
+            <button class="chip" data-type="system">System</button>
+            <button class="chip" data-type="roll">4D Roll</button>
           </div>
         </div>
-        <div>
-          <label for="fourd-stake">Stake per number</label>
-          <select id="fourd-stake" class="select">
-            <option value="1">$1</option>
-            <option value="2">$2</option>
-            <option value="5">$5</option>
-            <option value="10">$10</option>
-          </select>
+
+        <div class="field two-up">
+          <div>
+            <label>Big or Small</label>
+            <div class="chip-row" id="fourd-size">
+              <button class="chip selected" data-size="big">Big</button>
+              <button class="chip" data-size="small">Small</button>
+            </div>
+          </div>
+          <div>
+            <label for="fourd-stake">Stake per number</label>
+            <select id="fourd-stake" class="select">
+              <option value="1">$1</option>
+              <option value="2">$2</option>
+              <option value="5">$5</option>
+              <option value="10">$10</option>
+            </select>
+          </div>
         </div>
+
+        <div id="fourd-entry-note" class="entrynote"></div>
+        <button id="fourd-check-btn" class="btn primary big">Check last 30 draws</button>
+        <div id="fourd-check-out" class="checkout"></div>
       </div>
 
-      <div id="fourd-entry-note" class="entrynote"></div>
-      <button id="fourd-check-btn" class="btn primary big">Check last 30 draws</button>
-      <div id="fourd-check-out" class="checkout"></div>
+      <!-- ---------- TOTO ---------- -->
+      <div id="pane-toto" class="checkpane hidden">
+        <div class="field">
+          <label>Your numbers <span class="muted-sm" id="toto-pick-count">0 of 6</span></label>
+          <div id="toto-grid" class="ball-grid"></div>
+          <p class="hint">Six numbers for an Ordinary Entry. Seven to twelve is a System Entry,
+             which the rules treat as every six-number combination inside your pick.</p>
+        </div>
+        <div class="btn-row">
+          <button id="toto-clear" class="btn">Clear</button>
+          <button id="toto-quickpick" class="btn">Quick pick</button>
+        </div>
+        <div id="toto-entry-note" class="entrynote"></div>
+        <button id="toto-check-btn" class="btn primary big">Check last 30 draws</button>
+        <div id="toto-check-out" class="checkout"></div>
+      </div>
+
+      <!-- ---------- SWEEP ---------- -->
+      <div id="pane-sweep" class="checkpane hidden">
+        <div class="field">
+          <label for="sweep-entry">Your ticket number</label>
+          <input id="sweep-entry" class="input big-num sweep-num" inputmode="numeric"
+                 maxlength="9" placeholder="258 9838" autocomplete="off">
+          <p class="hint">Seven digits, as printed on the ticket. Spaces are ignored.</p>
+        </div>
+        <div id="sweep-entry-note" class="entrynote"></div>
+        <button id="sweep-check-btn" class="btn primary big">Check all stored draws</button>
+        <div id="sweep-check-out" class="checkout"></div>
+      </div>
     </section>
 
     <!-- ===================== STATS ===================== -->
     <section id="view-stats" class="view">
+      <div class="chip-row game-row" id="stats-game">
+        <button class="chip selected" data-statsgame="fourd">4D</button>
+        <button class="chip" data-statsgame="toto">TOTO</button>
+      </div>
+
       <div class="chip-row" id="stats-window">
         <button class="chip" data-window="30">30</button>
         <button class="chip selected" data-window="100">100</button>
@@ -120,10 +170,26 @@
       <p class="muted-sm">Checked against every draw in the app, newest first.</p>
 
       <div class="field">
-        <label for="save-fourd">Add a number</label>
+        <label for="save-fourd">Add a 4D number</label>
         <div class="btn-row tight">
           <input id="save-fourd" class="input" inputmode="numeric" maxlength="4" placeholder="1234" autocomplete="off">
           <button id="save-fourd-btn" class="btn">Add</button>
+        </div>
+      </div>
+
+      <div class="field">
+        <label for="save-toto">Add a TOTO set</label>
+        <div class="btn-row tight">
+          <input id="save-toto" class="input" inputmode="numeric" placeholder="4 11 23 29 38 45" autocomplete="off">
+          <button id="save-toto-btn" class="btn">Add</button>
+        </div>
+      </div>
+
+      <div class="field">
+        <label for="save-sweep">Add a Sweep ticket</label>
+        <div class="btn-row tight">
+          <input id="save-sweep" class="input" inputmode="numeric" maxlength="9" placeholder="258 9838" autocomplete="off">
+          <button id="save-sweep-btn" class="btn">Add</button>
         </div>
       </div>
 
@@ -136,29 +202,40 @@
 
       <div class="card">
         <h3>Not affiliated with Singapore Pools</h3>
-        <p>This app is an independent results viewer. It is not operated by,
-           endorsed by, or connected to Singapore Pools or the Singapore
-           Totalisator Board. You cannot place a bet here, and this app does not
-           handle money.</p>
+        <p>This app is an independent results viewer for 4D, TOTO and Singapore
+           Sweep. It is not operated by, endorsed by, or connected to Singapore
+           Pools or the Singapore Totalisator Board. You cannot place a bet here,
+           and this app does not handle money.</p>
       </div>
 
       <div class="card">
         <h3>Where the results come from</h3>
-        <p id="about-source">Results are read from Singapore Pools' published 4D
-           draw pages. Official results are whatever Singapore Pools publishes —
-           if this app and their site ever disagree, their site is right.</p>
+        <p id="about-source">Results are read from Singapore Pools' published draw
+           pages. Official results are whatever Singapore Pools publishes — if this
+           app and their site ever disagree, their site is right.</p>
         <p class="fineprint" id="about-feed"></p>
         <button id="about-refresh" class="btn">Refresh now</button>
       </div>
 
       <div class="card">
         <h3>About the prize figures</h3>
-        <p>4D prizes are fixed amounts per $1 stake, taken from Singapore Pools'
-           published 4D Game Rules, so the checker works them out exactly rather
-           than estimating.</p>
-        <p>iBet is not the fixed prize divided by the number of permutations —
-           it has its own rate for each digit pattern, and the checker uses those
-           published rates.</p>
+        <p><b>4D</b> pays fixed amounts per $1 stake, taken from Singapore Pools'
+           published 4D Game Rules, so the checker works them out exactly. iBet is
+           not the fixed prize divided by the permutations — it has its own rate for
+           each digit pattern, and the checker uses those published rates.</p>
+        <p><b>TOTO</b> Groups 5, 6 and 7 are fixed at $50, $25 and $10. Groups 1 to 4
+           are a share of that draw's prize pool, so the amount only exists once the
+           draw is over. Where the published share is known the checker uses it;
+           where it is not, it says so rather than guessing.</p>
+        <p><b>Singapore Sweep</b> group prizes are fixed and printed in each draw's
+           own results, so the checker reports the figure from the draw itself. The
+           top three prizes are not published alongside the numbers, so a win there
+           is reported without an amount rather than with a wrong one.</p>
+      </div>
+
+      <div class="card">
+        <h3>Privacy</h3>
+        <p>How IMAGOFORGE handles your data: <a href="https://imagoforge.app/privacy/">Privacy policy</a></p>
       </div>
 
       <div class="card warn-card">
@@ -167,8 +244,7 @@
            from the National Problem Gambling Helpline on <b>1800-6-668-668</b>.</p>
       </div>
 
-      <p class="fineprint">SG 4D v1.0 · <span id="build-note"></span></p>
-      <div class="card"><h3>Privacy</h3><p>How IMAGOFORGE handles your data: <a href="https://imagoforge.app/privacy/">Privacy policy</a></p></div>
+      <p class="fineprint">SG Lottery v1.3 · <span id="build-note"></span></p>
     </section>
 
   </main>
@@ -186,8 +262,8 @@
   <div id="disclaimer" class="overlay hidden">
     <div class="ovcard">
       <h1>Before you start</h1>
-      <p><b>This is a results app, not a betting app.</b> It shows published 4D
-         results and checks numbers against them.</p>
+      <p><b>This is a results app, not a betting app.</b> It shows published 4D,
+         TOTO and Singapore Sweep results and checks numbers against them.</p>
       <ul class="howlist">
         <li>Not affiliated with or endorsed by Singapore Pools.</li>
         <li>You cannot place a bet here. No money changes hands.</li>

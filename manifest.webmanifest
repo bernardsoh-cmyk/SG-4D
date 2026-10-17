@@ -1,7 +1,7 @@
 {
-  "name": "SG 4D — Results & Checker",
-  "short_name": "SG 4D",
-  "description": "Singapore 4D results, a prize checker built on the published game rules, and draw statistics. An independent results viewer, not a betting app.",
+  "name": "SG Lottery — 4D, TOTO & Sweep Results",
+  "short_name": "SG Lottery",
+  "description": "Singapore 4D, TOTO and Sweep results, prize checkers built on the published game rules, and draw statistics. An independent results viewer, not a betting app.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
