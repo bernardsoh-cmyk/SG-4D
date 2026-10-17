@@ -32,10 +32,20 @@ window.SGData = (function () {
   var CACHE_KEY = 'sg4d.history.v2';        // v2: multi-game shape
   var FRESH_MS = 30 * 60 * 1000;
 
-  /* Measured, not guessed: on 11 Oct the 18:30 4D draw's file carried a
-   * Last-Modified of 18:52 SGT. 20 minutes is the point from which it is worth
-   * looking; before that the app is not yet entitled to call itself behind. */
-  var RESULTS_LAG_MS = 20 * 60 * 1000;
+  /* How long after a draw its result actually appears. Measured from the
+   * Last-Modified of each game's own file, not assumed:
+   *
+   *   4D     draw 18:30 -> published 18:54   (24 min)
+   *   TOTO   draw 18:30 -> published 19:12   (42 min)
+   *   Sweep  draw 18:00 -> published 19:54   (114 min)
+   *
+   * This started as one global 20 minutes taken from the 4D figure, which made
+   * the app declare TOTO behind 22 minutes early and Sweep an hour and a half
+   * early — showing a "may be out" warning while Singapore Pools had simply
+   * not published yet. The value is per game, with a little headroom so a
+   * slightly slow night is not reported as a fault. Being a few minutes early
+   * costs nothing, because the poll that follows is conditional. */
+  var RESULTS_LAG_MS = { fourd: 30 * 60 * 1000, toto: 50 * 60 * 1000, sweep: 125 * 60 * 1000 };
 
   var ARCHIVE = 'https://www.singaporepools.com.sg/DataFileArchive/Lottery/Output/';
 
@@ -80,7 +90,7 @@ window.SGData = (function () {
     for (var back = 0; back < 40; back++) {
       var probe = new Date(d.getTime() - back * 86400000);
       if (!isDrawDay(cfg, probe)) continue;
-      if (d.getTime() >= drawTimeOn(cfg, probe).getTime() + RESULTS_LAG_MS) return isoOf(probe);
+      if (d.getTime() >= drawTimeOn(cfg, probe).getTime() + RESULTS_LAG_MS[game]) return isoOf(probe);
     }
     return null;
   }
