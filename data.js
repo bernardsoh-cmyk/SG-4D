@@ -27,7 +27,7 @@
 window.SGData = (function () {
   'use strict';
 
-  var FEED_URL = 'https://wrsoh2502-cell.github.io/SG-4D/data/history.json';
+  var FEED_URL = 'https://bernardsoh-cmyk.github.io/SG-4D/data/history.json';
   var SEED_URL = './data/history.json';
   var CACHE_KEY = 'sg4d.history.v2';        // v2: multi-game shape
   var FRESH_MS = 30 * 60 * 1000;

@@ -87,10 +87,10 @@ Takes a few minutes — it sleeps 0.4s between requests, deliberately.
 
 ### The published feed
 
-- **Repo**: <https://github.com/wrsoh2502-cell/SG-4D> (public — GitHub
+- **Repo**: <https://github.com/bernardsoh-cmyk/SG-4D> (public — GitHub
   Pages needs it to be, and the app has to be able to read the feed anonymously)
-- **Feed**: <https://wrsoh2502-cell.github.io/SG-4D/data/history.json>
-- **Web version of the app**: <https://wrsoh2502-cell.github.io/SG-4D/>
+- **Feed**: <https://bernardsoh-cmyk.github.io/SG-4D/data/history.json>
+- **Web version of the app**: <https://bernardsoh-cmyk.github.io/SG-4D/>
 
 Pages serves the repo root, so the same deploy publishes both the JSON the app
 reads and a working browser version of the app. `FEED_URL` at the top of
