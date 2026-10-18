@@ -51,7 +51,8 @@ window.SGData = (function () {
 
   var state = {
     games: { fourd: [], toto: [], sweep: [] },
-    stale: { fourd: false, toto: false, sweep: false },
+    stale: { fourd: false, toto: false, sweep: false },   // late enough to say so
+    due:   { fourd: false, toto: false, sweep: false },   // worth looking for
     generated: null,
     source: 'seed',
     error: null
@@ -84,15 +85,39 @@ window.SGData = (function () {
     return t;
   }
 
-  /** Most recent date on which a draw of this game should already be published. */
-  function lastExpectedDraw(game) {
+  /* The earliest a result could conceivably be up. Singapore Pools has never
+   * been observed publishing sooner than about 18 minutes after a draw, so
+   * looking before this is pointless; looking from here on is not. */
+  var EARLIEST_MS = 10 * 60 * 1000;
+
+  /**
+   * Most recent draw date of this game that is past `afterMs` from its draw
+   * time — i.e. one we could be holding by now.
+   *
+   * Two different questions use this, and conflating them was costing ten
+   * minutes or more on every draw:
+   *
+   *   "should we be LOOKING yet?"     EARLIEST_MS      — cheap, so look early
+   *   "should we WARN it is late?"    RESULTS_LAG_MS   — expensive to get
+   *                                                      wrong, so wait
+   *
+   * Using the warning threshold for both meant the app would not so much as
+   * glance at the feed until 30 minutes after a 4D draw, while the result had
+   * been sitting there since minute 18.
+   */
+  function lastDrawAfter(game, afterMs) {
     var cfg = GAMES[game], d = sgNow();
     for (var back = 0; back < 40; back++) {
       var probe = new Date(d.getTime() - back * 86400000);
       if (!isDrawDay(cfg, probe)) continue;
-      if (d.getTime() >= drawTimeOn(cfg, probe).getTime() + RESULTS_LAG_MS[game]) return isoOf(probe);
+      if (d.getTime() >= drawTimeOn(cfg, probe).getTime() + afterMs) return isoOf(probe);
     }
     return null;
+  }
+
+  /** Most recent date on which a draw of this game should already be published. */
+  function lastExpectedDraw(game) {
+    return lastDrawAfter(game, RESULTS_LAG_MS[game]);
   }
 
   /** Next draw date/time for this game. */
@@ -340,13 +365,22 @@ window.SGData = (function () {
   function recomputeStale() {
     GAME_KEYS.forEach(function (g) {
       var newest = state.games[g][0];
-      var expected = lastExpectedDraw(g);
-      state.stale[g] = !!(expected && (!newest || newest.date < expected));
+      var have = newest ? newest.date : '';
+      // Two thresholds, two meanings. `due` starts the search; `stale` starts
+      // the warning. See lastDrawAfter.
+      var couldHave = lastDrawAfter(g, EARLIEST_MS);
+      var shouldHave = lastExpectedDraw(g);
+      state.due[g] = !!(couldHave && have < couldHave);
+      state.stale[g] = !!(shouldHave && have < shouldHave);
     });
   }
 
   function anyStale() {
     return GAME_KEYS.some(function (g) { return state.stale[g]; });
+  }
+
+  function anyDue() {
+    return GAME_KEYS.some(function (g) { return state.due[g]; });
   }
 
   /* ---------------- fetching ---------------- */
@@ -427,7 +461,7 @@ window.SGData = (function () {
 
   /** Pull every game that is currently behind, in parallel. */
   function catchUpStale(conditional) {
-    var behind = GAME_KEYS.filter(function (g) { return state.stale[g]; });
+    var behind = GAME_KEYS.filter(function (g) { return state.due[g]; });
     if (!behind.length) return Promise.resolve(false);
     return Promise.all(behind.map(function (g) {
       return nativeLatest(g, conditional).then(function (rows) {
@@ -464,7 +498,7 @@ window.SGData = (function () {
         .catch(function (e) { state.error = e.message; });
     }).then(function () {
       recomputeStale();
-      if (!nativeNet || !anyStale()) return null;
+      if (!nativeNet || !anyDue()) return null;
       return catchUpStale(false).then(function (grew) {
         if (grew) { state.generated = new Date().toISOString(); state.error = null; }
       });
@@ -487,7 +521,10 @@ window.SGData = (function () {
    * Polling stops once every game is current, never runs in the background,
    * and never runs without the bridge. */
 
-  var POLL_MS = 60 * 1000;
+  /* 30s, not 60s. The gap between a result appearing and the app showing it
+   * is the entire point of this loop, and the check costs nothing when there
+   * is nothing new — an unchanged file answers 304 with no body. */
+  var POLL_MS = 30 * 1000;
   var pollTimer = null;
   var onPollResult = null;
 
@@ -496,13 +533,13 @@ window.SGData = (function () {
 
   function schedulePoll() {
     stopPoll();
-    if (!nativeNet || !anyStale() || hidden()) return;
+    if (!nativeNet || !anyDue() || hidden()) return;
     pollTimer = setTimeout(poll, POLL_MS);
   }
 
   function poll() {
     pollTimer = null;
-    if (!nativeNet || !anyStale() || hidden()) return;
+    if (!nativeNet || !anyDue() || hidden()) return;
     catchUpStale(true).then(function (grew) {
       if (grew) {
         state.generated = new Date().toISOString();
@@ -517,7 +554,7 @@ window.SGData = (function () {
 
   if (typeof document !== 'undefined') {
     document.addEventListener('visibilitychange', function () {
-      if (document.hidden) stopPoll(); else if (anyStale()) poll();
+      if (document.hidden) stopPoll(); else if (anyDue()) poll();
     });
   }
 
@@ -529,6 +566,7 @@ window.SGData = (function () {
     label: function (g) { return GAMES[g].label; },
     draws: function (g) { return state.games[g] || []; },
     isStale: function (g) { return !!state.stale[g]; },
+    isDue: function (g) { return !!state.due[g]; },
     anyStale: anyStale,
     nextDraw: nextDraw,
     lastExpectedDraw: lastExpectedDraw,
