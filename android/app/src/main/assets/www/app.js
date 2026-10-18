@@ -24,7 +24,6 @@
     statsGame: 'fourd',
     statsWindow: 100,
     fourdType: 'ordinary',
-    fourdSize: 'big',
     totoPicks: [],
     selected: {}                             // per game, so switching keeps place
   };
@@ -40,6 +39,14 @@
 
   function money(v) {
     return '$' + Number(v).toLocaleString('en-SG', { maximumFractionDigits: 2 });
+  }
+
+  /* Bet amounts always carry cents. money() suits prizes, where "$2,000" reads
+   * better than "$2,000.00", but a stake of 1.5 rendering as "$1.5" does not
+   * look like money at all. */
+  function betMoney(v) {
+    return '$' + Number(v).toLocaleString('en-SG',
+      { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   }
 
   var DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -269,18 +276,44 @@
 
   /* ---------------- check: 4D ---------------- */
 
+  /** Whatever was typed into a bet field, as a non-negative number. */
+  function betAmount(sel) {
+    var v = parseFloat(String($(sel).value).replace(/[^\d.]/g, ''));
+    return isFinite(v) && v > 0 ? v : 0;
+  }
+
+  function fourdBets() {
+    return { big: betAmount('#fourd-big'), small: betAmount('#fourd-small') };
+  }
+
+  /** Amount is the total of the two, kept live as either is typed. */
+  function renderAmount() {
+    var b = fourdBets();
+    $('#fourd-amount').textContent = betMoney(b.big + b.small);
+  }
+
   function describeFourD() {
+    renderAmount();
     var raw = $('#fourd-entry').value.trim().toUpperCase();
     var note = $('#fourd-entry-note');
-    var stake = parseFloat($('#fourd-stake').value);
+    var bets = fourdBets();
+    var stake = bets.big + bets.small;
     note.textContent = '';
     if (!raw) return;
+
+    if (!stake) { note.textContent = 'Enter an amount for Big, Small, or both.'; return; }
+
+    // Which sides were bought, for the cost sentences below.
+    var sides = [];
+    if (bets.big) sides.push(betMoney(bets.big) + ' Big');
+    if (bets.small) sides.push(betMoney(bets.small) + ' Small');
+    var sideText = sides.join(' + ');
 
     if (ui.fourdType === 'roll') {
       var nums = SGCheck.rollNumbers(raw);
       if (!nums) { note.textContent = 'A 4D Roll needs one rolling digit, e.g. 58R2.'; return; }
-      note.textContent = 'Covers 10 numbers (' + nums[0] + '–' + nums[9] + '). Costs ' +
-        money(10 * stake) + ' at ' + money(stake) + ' each.';
+      note.textContent = 'Covers 10 numbers (' + nums[0] + '–' + nums[9] + '), ' + sideText +
+        ' on each. Costs ' + betMoney(10 * stake) + '.';
       return;
     }
     if (!/^\d{4}$/.test(raw)) { note.textContent = 'Enter a 4-digit number from 0000 to 9999.'; return; }
@@ -297,17 +330,18 @@
         note.textContent = 'A number with four identical digits has only one permutation, so it cannot be a System Entry.';
         return;
       }
-      note.textContent = 'Covers all ' + perms + ' permutations (' + label + '). Costs ' +
-        money(perms * stake) + ' at ' + money(stake) + ' each, and each pays the full fixed prize.';
+      note.textContent = 'Covers all ' + perms + ' permutations (' + label + '), ' + sideText +
+        ' on each. Costs ' + betMoney(perms * stake) + ', and each pays the full fixed prize.';
     } else if (ui.fourdType === 'ibet') {
       if (pattern === 'allSame') {
         note.textContent = 'A number with four identical digits has only one permutation, so it cannot be an iBet.';
         return;
       }
-      note.textContent = 'Covers all ' + perms + ' permutations (' + label + ') for one ' +
-        money(stake) + ' stake. Prizes are correspondingly smaller — that is the trade.';
+      note.textContent = 'Covers all ' + perms + ' permutations (' + label + ') for ' + sideText +
+        '. Prizes are correspondingly smaller — that is the trade.';
     } else {
-      note.textContent = 'One number, exact order. ' + label.charAt(0).toUpperCase() + label.slice(1) + '.';
+      note.textContent = 'One number, exact order. ' + label.charAt(0).toUpperCase() + label.slice(1) +
+        (bets.big && bets.small ? '. Big and Small both collect where they apply.' : '.');
     }
   }
 
@@ -330,7 +364,7 @@
 
   function runFourDCheck() {
     var raw = $('#fourd-entry').value.trim().toUpperCase();
-    var stake = parseFloat($('#fourd-stake').value);
+    var bets = fourdBets();
     var out = $('#fourd-check-out');
     out.innerHTML = '';
     if (!raw) return;
@@ -338,23 +372,29 @@
     var list = draws('fourd').slice(0, 30);
     var hits = [], total = 0, error = null;
     list.forEach(function (d) {
-      var r = SGCheck.checkFourD(raw, ui.fourdType, ui.fourdSize, stake, d);
+      var r = SGCheck.checkFourDBet(raw, ui.fourdType, bets.big, bets.small, d);
       if (r.error) { error = r.error; return; }
       if (r.total > 0) { hits.push({ draw: d, result: r }); total += r.total; }
     });
 
     if (error) { summaryCard(out, false, 'Check that entry', error); return; }
 
+    var sides = [];
+    if (bets.big) sides.push(betMoney(bets.big) + ' Big');
+    if (bets.small) sides.push(betMoney(bets.small) + ' Small');
+
     summaryCard(out, hits.length,
       hits.length ? money(total) + ' across ' + hits.length + (hits.length === 1 ? ' draw' : ' draws')
                   : 'No wins in the last ' + list.length + ' draws',
-      raw + ' · ' + ui.fourdType + ' · ' + ui.fourdSize + ' · ' + money(stake) +
+      raw + ' · ' + ui.fourdType + ' · ' + sides.join(' + ') +
       ' per number, checked against the last ' + list.length + ' draws held in this app.');
 
     hits.forEach(function (h) {
       hitRow(out, prettyDate(h.draw.date) + ' · Draw ' + h.draw.draw, money(h.result.total), '',
         h.result.lines.map(function (l) {
-          return l.category + (l.count > 1 ? ' ×' + l.count : '') + ' — ' + money(l.amount);
+          // Name the side only when both were bought, otherwise it is noise.
+          var side = (bets.big && bets.small) ? l.size + ' ' : '';
+          return side + l.category + (l.count > 1 ? ' ×' + l.count : '') + ' — ' + money(l.amount);
         }).join(' · '));
     });
   }
@@ -770,15 +810,17 @@
         describeFourD();
       });
     });
-    $$('#fourd-size .chip').forEach(function (c) {
-      c.addEventListener('click', function () {
-        ui.fourdSize = c.getAttribute('data-size');
-        selectChip('#fourd-size', 'data-size', ui.fourdSize);
-        describeFourD();
+    $('#fourd-entry').addEventListener('input', describeFourD);
+    ['#fourd-big', '#fourd-small'].forEach(function (sel) {
+      $(sel).addEventListener('input', describeFourD);
+      // Normalise on the way out rather than while typing, so "1." or an empty
+      // field is not rewritten under the cursor mid-entry.
+      $(sel).addEventListener('blur', function () {
+        var v = betAmount(sel);
+        $(sel).value = v ? String(v) : '0';
+        renderAmount();
       });
     });
-    $('#fourd-entry').addEventListener('input', describeFourD);
-    $('#fourd-stake').addEventListener('change', describeFourD);
     $('#fourd-check-btn').addEventListener('click', runFourDCheck);
 
     $('#toto-clear').addEventListener('click', function () {
@@ -853,6 +895,7 @@
   function boot() {
     buildTotoGrid();
     renderTotoPicks();
+    renderAmount();
     showCheckPane();
     wire();
 

@@ -421,3 +421,36 @@ h3 { font-size: var(--fs-base); margin: 0 0 7px; }
 }
 
 .hitrow .amt.unknown { color: var(--warn); font-weight: 600; font-size: var(--fs-sm); }
+
+/* ---------------- 4D bet rows ---------------- */
+
+/* Big and Small each get a line with its own amount, and Amount totals them.
+ * The label column is fixed so the three rows line up as a little slip. */
+.betline {
+  display: grid; grid-template-columns: 72px 1fr; gap: 12px;
+  align-items: center; margin-bottom: 9px;
+}
+.betname { font-size: var(--fs-base); color: var(--text); font-weight: 600; }
+
+.amountbox { position: relative; display: flex; align-items: center; }
+.amountbox .dollar {
+  position: absolute; left: 14px; color: var(--muted);
+  font-size: var(--fs-base); pointer-events: none;
+}
+.input.amount {
+  padding-left: 30px; font-size: var(--fs-base);
+  font-variant-numeric: tabular-nums; text-align: right; padding-right: 14px;
+}
+
+/* The total is a readout, not a field: it is derived, and letting it look
+ * editable would invite someone to type into it and wonder why nothing
+ * happened. Same alignment as the inputs above so the column still reads. */
+.betline.total {
+  margin-top: 13px; padding-top: 13px; border-top: 1px solid var(--line);
+  margin-bottom: 0;
+}
+.amounttotal {
+  display: block; text-align: right; padding: 0 14px;
+  font-size: var(--fs-md); font-weight: 700; color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}

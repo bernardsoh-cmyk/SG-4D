@@ -88,22 +88,33 @@
           </div>
         </div>
 
-        <div class="field two-up">
-          <div>
-            <label>Big or Small</label>
-            <div class="chip-row" id="fourd-size">
-              <button class="chip selected" data-size="big">Big</button>
-              <button class="chip" data-size="small">Small</button>
+        <!-- Big and Small are not a choice between two things: a real 4D slip
+             carries an amount against each, and a ticket with both collects on
+             both. So they are two fields, and Amount is their total. -->
+        <div class="field">
+          <label>Bet</label>
+
+          <div class="betline">
+            <label class="betname" for="fourd-big">Big</label>
+            <div class="amountbox">
+              <span class="dollar" aria-hidden="true">$</span>
+              <input id="fourd-big" class="input amount" inputmode="decimal"
+                     value="1" autocomplete="off" aria-label="Big bet amount in dollars">
             </div>
           </div>
-          <div>
-            <label for="fourd-stake">Stake per number</label>
-            <select id="fourd-stake" class="select">
-              <option value="1">$1</option>
-              <option value="2">$2</option>
-              <option value="5">$5</option>
-              <option value="10">$10</option>
-            </select>
+
+          <div class="betline">
+            <label class="betname" for="fourd-small">Small</label>
+            <div class="amountbox">
+              <span class="dollar" aria-hidden="true">$</span>
+              <input id="fourd-small" class="input amount" inputmode="decimal"
+                     value="0" autocomplete="off" aria-label="Small bet amount in dollars">
+            </div>
+          </div>
+
+          <div class="betline total">
+            <span class="betname">Amount</span>
+            <output id="fourd-amount" class="amounttotal" for="fourd-big fourd-small">$1.00</output>
           </div>
         </div>
 

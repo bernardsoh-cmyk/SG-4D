@@ -185,6 +185,56 @@ window.SGCheck = (function () {
     };
   }
 
+  /**
+   * Check a 4D ticket carrying a Big amount, a Small amount, or both.
+   *
+   * Big and Small are not alternatives. A slip has an amount against each, and
+   * rule 4.5 prices them as separate structures — Big pays across all five
+   * categories, Small pays more on the top three and nothing on Starter or
+   * Consolation. A ticket with both collects on both, so this scores each side
+   * at its own amount and adds them.
+   *
+   * Either amount may be zero, which simply means that side was not bought.
+   */
+  function checkFourDBet(entry, type, bigAmount, smallAmount, draw) {
+    var big = Number(bigAmount) || 0;
+    var small = Number(smallAmount) || 0;
+    if (big <= 0 && small <= 0) {
+      return { error: 'Enter an amount for Big, Small, or both.' };
+    }
+
+    var lines = [], total = 0, cost = 0, units = 0, error = null, meta = null;
+
+    [['big', big], ['small', small]].forEach(function (side) {
+      if (side[1] <= 0) return;
+      var r = checkFourD(entry, type, side[0], side[1], draw);
+      if (r.error) { error = r.error; return; }
+      meta = meta || r;
+      total += r.total;
+      cost += (r.cost !== undefined ? r.cost : side[1]);
+      units = Math.max(units, r.unitsStaked || 1);
+      r.lines.forEach(function (l) {
+        lines.push({
+          category: l.category, count: l.count, per: l.per, amount: l.amount,
+          size: side[0] === 'big' ? 'Big' : 'Small'
+        });
+      });
+    });
+
+    if (error) return { error: error };
+
+    // Highest-value prizes first, so the headline row of a win is the one that
+    // matters rather than whichever side happened to be scored first.
+    lines.sort(function (a, b) { return b.amount - a.amount; });
+
+    return {
+      total: total, cost: cost, unitsStaked: units, lines: lines,
+      big: big, small: small,
+      pattern: meta && meta.pattern, permutations: meta && meta.permutations,
+      numbers: meta && meta.numbers
+    };
+  }
+
   /* =============================== TOTO ===============================
    *
    * TOTO Game Rules cl. 5.5. Unlike 4D, this is not a fixed-prize game:
@@ -331,6 +381,7 @@ window.SGCheck = (function () {
 
   return {
     checkFourD: checkFourD,
+    checkFourDBet: checkFourDBet,
     checkToto: checkToto,
     checkSweep: checkSweep,
     totoGroup: totoGroup,
