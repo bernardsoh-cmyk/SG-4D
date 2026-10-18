@@ -54,4 +54,9 @@ dependencies {
   // file:// - see the comment at the top of MainActivity for why that matters
   // to an app that has to make cross-origin API calls.
   implementation("androidx.webkit:webkit:1.17.0")
+  // Background result checks and the notification they post. WorkManager
+  // because the check has to survive the app being closed and the device
+  // rebooting, which a plain alarm or a coroutine does not.
+  implementation("androidx.work:work-runtime:2.10.0")
+  implementation("androidx.core:core:1.15.0")
 }

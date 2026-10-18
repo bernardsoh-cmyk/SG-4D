@@ -744,6 +744,53 @@
     });
   }
 
+  /* ---------------- notifications ----------------
+   *
+   * Only exists inside the APK; the card stays hidden on the web, where there
+   * is no background checker to turn on. The toggle reflects what is actually
+   * true — preference AND system permission — rather than what was tapped, so
+   * it cannot sit on while Android quietly drops every notification. */
+
+  var notify = (function () {
+    try { if (window.AndroidNotify && window.AndroidNotify.available()) return window.AndroidNotify; }
+    catch (e) { /* not in the app */ }
+    return null;
+  })();
+
+  function renderNotifyState() {
+    if (!notify) return;
+    var on = notify.isEnabled();
+    $('#notify-toggle').checked = on;
+    $('#notify-label').textContent = on
+      ? 'Draw result notifications are on'
+      : 'Draw result notifications are off';
+  }
+
+  function wireNotifications() {
+    if (!notify) return;                       // web build: leave the card hidden
+    $('#notify-card').classList.remove('hidden');
+    renderNotifyState();
+
+    // Android answers the permission dialog here.
+    window.__notifyPermission = function (granted) {
+      if (!granted) {
+        notify.setEnabled(false);
+        $('#notify-note').textContent =
+          'Android is blocking notifications for this app. Turn them on in ' +
+          'Settings → Apps → SG Lottery → Notifications, then switch this back on.';
+      }
+      renderNotifyState();
+    };
+
+    $('#notify-toggle').addEventListener('change', function (e) {
+      if (!e.target.checked) { notify.setEnabled(false); renderNotifyState(); return; }
+      // Ask the system first; only claim it is on once that is settled.
+      if (notify.requestPermission()) { notify.setEnabled(true); return; }
+      notify.setEnabled(true);
+      renderNotifyState();
+    });
+  }
+
   /* ---------------- wiring ---------------- */
 
   function selectChip(row, attr, value) {
@@ -896,6 +943,7 @@
     buildTotoGrid();
     renderTotoPicks();
     renderAmount();
+    wireNotifications();
     showCheckPane();
     wire();
 

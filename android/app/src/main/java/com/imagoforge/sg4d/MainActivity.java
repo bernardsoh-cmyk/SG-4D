@@ -122,6 +122,16 @@ public class MainActivity extends Activity {
         // asynchronous; see NetBridge.java.
         webView.addJavascriptInterface(new NetBridge(webView), "AndroidNet");
 
+        // The notification toggle, and the background check behind it.
+        webView.addJavascriptInterface(new NotifyBridge(this), "AndroidNotify");
+        if (getSharedPreferences(ResultWorker.PREFS, MODE_PRIVATE)
+                .getBoolean(ResultWorker.KEY_ENABLED, false)) {
+            // Re-arm on every launch: WorkManager survives reboots, but a
+            // check that failed while the device was off would otherwise sit
+            // waiting for a window that has already passed.
+            ResultWorker.scheduleNext(this);
+        }
+
         // AdHost wraps the WebView so the banner docks below it, and owns the
         // "AndroidAds" bridge and the ad lifecycle. See AdHost.java.
         View root = new AdHost(this, webView).root();
@@ -141,6 +151,17 @@ public class MainActivity extends Activity {
         } else {
             webView.loadUrl(APP_URL);
         }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
+        super.onRequestPermissionsResult(requestCode, permissions, results);
+        if (requestCode != NotifyBridge.REQUEST_CODE) return;
+        final boolean granted = results.length > 0
+                && results[0] == android.content.pm.PackageManager.PERMISSION_GRANTED;
+        if (granted) ResultWorker.scheduleNext(this);
+        webView.evaluateJavascript(
+                "window.__notifyPermission && window.__notifyPermission(" + granted + ")", null);
     }
 
     @Override

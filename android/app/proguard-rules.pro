@@ -9,3 +9,8 @@
 # by a Room database - without this the app dies at startup inside
 # androidx.startup.InitializationProvider, long before any of our code runs.
 -keep class * extends androidx.room.RoomDatabase { <init>(); }
+
+# WorkManager instantiates Workers reflectively by class name, so R8 sees no
+# caller and strips the constructor. Without this the background result check
+# fails only in release builds, and only at the moment it is supposed to fire.
+-keep class * extends androidx.work.ListenableWorker { <init>(...); }
